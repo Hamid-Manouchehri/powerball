@@ -1,0 +1,24 @@
+plot(t_damp20,'o')
+plot(diff(t_damp20),'o')
+id = diff(t_damp20)<0;
+id = [0 ;id];
+t = t_damp20;
+plot(diff(t(1:100)))
+mean(diff(t(1:50)))
+t=t*mean(diff(t(1:50)));
+plot(t,ee_pos_damp20(1,:))
+plot(t,ee_pos_damp20(2,:),'r')
+figure;plot(ee_pos_damp20(1,:),ee_pos_damp20(2,:),'o')
+Vx = [0 diff(ee_pos_damp20(1,:))];
+plot(Vx)
+Vy = [0 diff(ee_pos_damp20(2,:))];
+plot(Vy,'r')
+figure, plot(Vx,Vy,'o')
+a =[0 diff(sqrt(Vx.^2+Vy.^2))];
+plot(a)
+j = [0 diff(a)];
+plot(abs(j))
+id = abs(j)>0.5e-4;
+plot(ee_pos_damp20(1,:),ee_pos_damp20(2,:),'.')
+hold on
+plot(ee_pos_damp20(1,id==1),ee_pos_damp20(2,id==1),'ro')
