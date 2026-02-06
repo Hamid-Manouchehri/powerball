@@ -74,6 +74,8 @@ function [t, ee_pos, ee_rot, ee_vel, FT_xy_amp] = extract_csv(csvFile)
     opts = setvaropts(opts, tsCol, 'WhitespaceRule', 'trim');
     
     data = readtable(csvFile, opts);
+
+    
     t = datetime(data.TimeStamp, 'InputFormat', 'HH:mm:ss:SSSSSS');
     t = seconds(t - t(1));
     Q = data{:, {'Q1','Q2','Q3','Q4','Q5','Q6'}};
@@ -101,93 +103,8 @@ csvFile_et_damp_10 = "../data/admittance_control/test_2_020426/et_maze_damp_10.0
 csvFile_et_damp_80 = "../data/admittance_control/test_2_020426/et_maze_damp_80.000000_01.csv";  % TODO
 
 
+%%% Loading data:
 [t_damp10, ee_pos_damp10, ee_rot_damp10, ee_vel_damp10, FT_xy_amp_damp10] = ...
      extract_csv(csvFile_et_damp_10);
 [t_damp80, ee_pos_damp80, ee_rot_damp80, ee_vel_damp80, FT_xy_amp_damp80] = ...
      extract_csv(csvFile_et_damp_80);
-
-
-%%%% plots:
-%%% Pos
-%figure(Name="pos", NumberTitle="off");
-figure
-subplot(3, 1, 1); hold on;
-plot(t_damp10', ee_pos_damp10(1,:),'.'); 
-%title("damp=20")
-xlabel('time (s)');
-ylabel('pos (m)');
-grid on;
-
-
-%{
-subplot(3, 1, 2); hold on;
-plot(t_damp50, ee_pos_damp50.'); 
-title("damp=50")
-xlabel('time (s)');
-ylabel('pos (m)');
-legend("x", "y", "z");
-grid on;
-
-subplot(3, 1, 3); hold on;
-plot(t_damp80, ee_pos_damp80.'); 
-title("damp=80")
-xlabel('time (s)');
-ylabel('pos (m)');
-legend("x", "y", "z");
-grid on;
-
-
-%%% Vel
-figure(Name="vel", NumberTitle="off");
-subplot(3, 1, 1); hold on;
-plot(t_damp20, ee_vel_damp20.'); 
-title("damp=20")
-xlabel('time (s)');
-ylabel('vel (m/s)');
-legend("dx", "dy", "dz");
-grid on;
-
-subplot(3, 1, 2); hold on;
-plot(t_damp50, ee_vel_damp50.'); 
-title("damp=50")
-xlabel('time (s)');
-ylabel('vel (m/s)');
-legend("dx", "dy", "dz");
-grid on;
-
-subplot(3, 1, 3); hold on;
-plot(t_damp80, ee_vel_damp80.'); 
-title("damp=80")
-xlabel('time (s)');
-ylabel('vel (m/s)');
-legend("dx", "dy", "dz");
-grid on;
-
-
-%%% FT
-figure(Name="F/T", NumberTitle="off");
-subplot(3, 1, 1)
-plot(t_damp20, FT_xy_amp_damp20); 
-title('damp=20'); 
-xlabel('time (s)');
-ylabel('Force (N)');
-legend("Fxy");
-
-subplot(3, 1, 2)
-plot(t_damp50, FT_xy_amp_damp50); 
-title('damp=50'); 
-xlabel('time (s)');
-ylabel('Force (N)');
-legend("Fxy");
-
-subplot(3, 1, 3)
-plot(t_damp80, FT_xy_amp_damp80); 
-title('damp=80'); 
-xlabel('time (s)');
-ylabel('Force (N)');
-legend("Fxy");
-
-
-figure;
-plot(ee_pos_damp20(1,:), ee_pos_damp20(2,:))
-%}

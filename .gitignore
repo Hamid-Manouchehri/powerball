@@ -10,3 +10,10 @@ build/
 CMakeFiles/
 yaml-cpp/
 data/
+
+# MATLAB
+**/*.asv
+
+# python
+**/*.pyc
+
