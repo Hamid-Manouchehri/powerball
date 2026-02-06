@@ -1,3 +1,4 @@
+
 # C extensions
 *.so
 
@@ -13,7 +14,9 @@ data/
 
 # MATLAB
 **/*.asv
+/home/hamid-tuf/projects/powerball/matlab/AAC/test.m
 
 # python
 **/*.pyc
 
+/home/hamid-tuf/projects/powerball/data/

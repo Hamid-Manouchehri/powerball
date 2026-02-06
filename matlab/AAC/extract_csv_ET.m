@@ -15,9 +15,7 @@ function [t, ee_pos, ee_rot, ee_vel, FT] = extract_csv_ET(fName)
     Q = data(:, 2:7);
     dQ = data(:,8:13);
     FT = data(:,14:19);
-    
-    %FT_xy_amp = sqrt(FT(:,1).^2 + FT(:,2).^2);
-    
+        
     numRowQ = size(Q, 1);
     ee_rot = zeros(numRowQ,3);
     ee_pos = zeros(numRowQ,3);
