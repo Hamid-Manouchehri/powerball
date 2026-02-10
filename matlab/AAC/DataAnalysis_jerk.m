@@ -8,6 +8,7 @@ C = 10;
 dataset = load_csv(fName);
 t = dataset.timesteps; Q = dataset.q; dQ = dataset.qd; FT = dataset.FT;
 
+%%% change to cartesian-space
 numDataSamples = size(Q, 1);
 ee_pos         = zeros(numDataSamples,3);
 ee_rot         = zeros(numDataSamples,3);
@@ -21,6 +22,8 @@ for i = 1:numDataSamples
     ee_pos(i, :) = T(4, :);
 end
 
+
+%%% numerical computation of jerk
 jEE = ee_pos(5:end,:)-2*ee_pos(4:end-1,:)+2*ee_pos(2:end-3,:)-ee_pos(1:end-4,:);
 dt = diff(t);
 
