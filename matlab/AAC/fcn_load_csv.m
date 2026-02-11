@@ -1,4 +1,4 @@
-function dataset = load_csv(Filename)
+function dataset = fcn_load_csv(Filename)
 
     offset = 0;
     data = readtable(Filename, 'Format', 'auto');

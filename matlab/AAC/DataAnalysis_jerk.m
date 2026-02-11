@@ -1,12 +1,16 @@
 clc;        close all;          clear
 
-dataDirName = '/home/hamid-tuf/projects/powerball/data/admittance_control/test_2_020426/';
-fName = [dataDirName 'et_maze_damp_10.000000_01.csv'];  % TODO
+dataDirName = '/home/hamid-tuf/projects/powerball/data/admittance_control/test_4_021126/';
+fName = [dataDirName 'hm_test_damp_100_damp_100.000000_01.csv'];  % TODO
 C = 10;
 
 %%% Loading data: time, EndEff Position, EndEff Rotation, EndEff Vel, F/T
-dataset = load_csv(fName);
-t = dataset.timesteps; Q = dataset.q; dQ = dataset.qd; FT = dataset.FT;
+dataset = fcn_load_csv(fName);
+t = dataset.timesteps;
+Q = dataset.q;
+dQ = dataset.qd;
+FT = dataset.FT;
+admit_vel = dataset.vel;
 
 %%% change to cartesian-space
 numDataSamples = size(Q, 1);
@@ -15,8 +19,8 @@ ee_rot         = zeros(numDataSamples,3);
 ee_vel         = zeros(numDataSamples,6);
 
 for i = 1:numDataSamples
-    ee_vel(i, :) = dQ(i, :)*transpose(Jacob_schunk(Q(i, :)));
-    T = FK_schunk(Q(i, :));
+    ee_vel(i, :) = dQ(i, :)*transpose(fcn_Jacob_schunk(Q(i, :)));
+    T = fcn_FK_schunk(Q(i, :));
     T = T';
     ee_rot(i, :) = rotm2eul(T(1:3,:), 'ZYX');  % [yaw pitch roll] in radians
     ee_pos(i, :) = T(4, :);

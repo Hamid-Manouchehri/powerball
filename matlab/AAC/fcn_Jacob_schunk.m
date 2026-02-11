@@ -1,4 +1,4 @@
-function J = Jacob_schunk(Q)
+function J = fcn_Jacob_schunk(Q)
     %   Q: 6x1 (or 1x6) joint vector [q1..q6]
     %   J: 6x6 Jacobian
     

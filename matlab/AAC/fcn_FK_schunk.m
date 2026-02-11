@@ -1,4 +1,4 @@
-function T = FK_schunk(Q)
+function T = fcn_FK_schunk(Q)
     %   Q  : 6x1 (or 1x6) joint vector [q1..q6]
     %   a1,a2,a3,d6 : scalar link parameters used in the original C++ code
     %   T  : 3x4 matrix

@@ -1,4 +1,4 @@
-function [t, ee_pos, ee_rot, ee_vel, FT] = extract_csv_ET(fName)
+function [t, ee_pos, ee_rot, ee_vel, FT] = fcn_extract_csv_ET(fName)
 
     buf = importdata(fName);
     t_txt = buf.textdata(:,1);          L = length(t_txt);
@@ -22,8 +22,8 @@ function [t, ee_pos, ee_rot, ee_vel, FT] = extract_csv_ET(fName)
     ee_vel = zeros(numRowQ,6);
     
     for i = 1:numRowQ
-        ee_vel(i, :) = dQ(i, :)*transpose(Jacob_schunk(Q(i, :)));
-        T = FK_schunk(Q(i, :));
+        ee_vel(i, :) = dQ(i, :)*transpose(fcn_Jacob_schunk(Q(i, :)));
+        T = fcn_FK_schunk(Q(i, :));
         T = T';
         ee_rot(i, :) = rotm2eul(T(1:3,:), 'ZYX');  % [yaw pitch roll] in radians
         ee_pos(i, :) = T(4, :);

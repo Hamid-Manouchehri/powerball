@@ -1,11 +1,11 @@
 clc;        close all;          clear all
 
-dataDirName = '/home/hamid-tuf/projects/powerball/data/admittance_control/test_2_020426/';
-fName = [dataDirName 'et_maze_damp_10.000000_01.csv'];  % TODO
+dataDirName = '/home/hamid-tuf/projects/powerball/data/admittance_control/test_4_021126/';
+fName = [dataDirName 'et_maze_damp_10_damp_10.000000_01.csv'];  % TODO
 C = 10;
 
 %%% Loading data: time, EndEff Position, EndEff Rotation, EndEff Vel, F/T
-[t, X, Q, Xd, F] = extract_csv_ET(fName);
+[t, X, Q, Xd, F] = fcn_extract_csv_ET(fName);
 plot(t,F,'.')
 
 jEE = X(5:end,:)-2*X(4:end-1,:)+2*X(2:end-3,:)-X(1:end-4,:);

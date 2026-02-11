@@ -1,10 +1,10 @@
-clc;        close all;          clear
+clc;        close all;          clear;
 
-dataDirName = '/home/hamid-tuf/projects/powerball/data/admittance_control/test_3_021026/';
+dataDirName = '/home/hamid-tuf/projects/powerball/data/admittance_control/test_4_021126/';
 fName = [dataDirName 'hm_test_damp_10_damp_10.000000_01.csv'];  % TODO
 
 %%% Loading data: time, EndEff Position, EndEff Rotation, EndEff Vel, F/T
-dataset   = load_csv(fName);
+dataset   = fcn_load_csv(fName);
 t         = dataset.timesteps; 
 Q         = dataset.q; 
 dQ        = dataset.qd; 
@@ -18,15 +18,13 @@ ee_rot         = zeros(numDataSamples,3);
 ee_vel         = zeros(numDataSamples,6);
 ee_accel       = zeros(numDataSamples,6);
 admit_accel    = zeros(numDataSamples,6);
-vel_error      = zeros(numDataSamples,3);
-accel_error    = zeros(numDataSamples,3);
 difference     = zeros(numDataSamples,1);
 XhatDot        = zeros(numDataSamples,3);
 XhatDDot       = zeros(numDataSamples,3);
 
 for i = 1:numDataSamples
-    ee_vel(i, :) = dQ(i, :)*transpose(Jacob_schunk(Q(i, :)));
-    T = FK_schunk(Q(i, :));
+    ee_vel(i, :) = dQ(i, :)*transpose(fcn_Jacob_schunk(Q(i, :)));
+    T = fcn_FK_schunk(Q(i, :));
     T = T';
     ee_rot(i, :) = rotm2eul(T(1:3,:), 'ZYX');  % [yaw pitch roll] in radians
     ee_pos(i, :) = T(4, :);  % measured end-effector velocity
@@ -43,8 +41,8 @@ end
 % based on Schunk datasheet:
 Qdot_lim  = 72*pi/180*ones(6,1);  % rad/s
 Qddot_lim = 150*pi/180*ones(6,1);  % rad/s^2
-Xdot = Jacob_schunk(Qdot_lim)*Qdot_lim;  % Extreme cartesian velocity
-Xddot = dJ_dt_fun(Qdot_lim, Qddot_lim)*Qdot_lim + Jacob_schunk(Qdot_lim)*Qddot_lim;  % Extreme cartesian acceleration
+Xdot = fcn_Jacob_schunk(Qdot_lim)*Qdot_lim;  % Extreme cartesian velocity
+Xddot = dJ_dt_fun(Qdot_lim, Qddot_lim)*Qdot_lim + fcn_Jacob_schunk(Qdot_lim)*Qddot_lim;  % Extreme cartesian acceleration
 
 for i=1:numDataSamples
     admit_accel(i,1:3) = M_admit\(FT(i,1:3)'-C_admit*admit_vel(i,1:3)');
@@ -67,6 +65,12 @@ for i=1:numDataSamples
     difference(i) = norm(XhatDDot(i,:) + R.*XhatDot(i,:));
 end
 
+figure
+plot(difference);
 
+figure
+plot(ee_pos(:,2), ee_pos(:,1),"b."); 
+hold on;
 
-
+epsilon = difference > 40;
+plot(ee_pos(epsilon == 1,2), ee_pos(epsilon == 1, 1), 'ro')
