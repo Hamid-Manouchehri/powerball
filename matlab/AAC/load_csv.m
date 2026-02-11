@@ -7,6 +7,7 @@ function dataset = load_csv(Filename)
     q    = table2array(data( (1+offset):(end-offset),  2:7  ));
     qd   = table2array(data( (1+offset):(end-offset),  8:13 ));
     FT   = table2array(data( (1+offset):(end-offset), 14:19 ));
+    vel  = table2array(data( (1+offset):(end-offset), 20:25 )); 
     
     timesteps = zeros(length(time), 1);
     
@@ -27,4 +28,5 @@ function dataset = load_csv(Filename)
     dataset.q          = q;
     dataset.qd         = qd;
     dataset.FT         = FT;
+    dataset.vel        = vel;
 end

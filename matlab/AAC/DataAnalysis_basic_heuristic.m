@@ -31,8 +31,8 @@ for i=2:numDataSamples-1
     ee_accel(i,1:3) = (ee_vel(i+1,1:3) - ee_vel(i-1,1:3)) ./ (2*dt(i));  % Central diff
 end
 
-M = 0.3*diag([1, 1, 1]);
-C = 10*diag([1.2, 1.0, 1.0]);
+M_admit = 0.3*diag([1, 1, 1]);
+C_admit = 10*diag([1.2, 1.0, 1.0]);
 
 % figure;
 % plot(t, ee_accel(:,1));
@@ -40,7 +40,7 @@ C = 10*diag([1.2, 1.0, 1.0]);
 difference = zeros(numDataSamples,1);
 for j=1:numDataSamples
     
-    difference(j) = norm(FT(j,1:3)' - M*ee_accel(j,1:3)' - C*ee_vel(j,1:3)');
+    difference(j) = norm(FT(j,1:3)' - M_admit*ee_accel(j,1:3)' - C_admit*ee_vel(j,1:3)');
 
 end
 
