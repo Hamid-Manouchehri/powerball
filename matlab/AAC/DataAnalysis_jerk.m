@@ -1,4 +1,4 @@
-clc;        close all;          clear
+clc;       clear;         close all;
 
 dataDirName = '/home/hamid-tuf/projects/powerball/data/admittance_control/test_4_021126/';
 fName = [dataDirName 'hm_test_damp_100_damp_100.000000_01.csv'];  % TODO
@@ -34,11 +34,13 @@ dt = diff(t);
 jEE = [zeros(3);jEE./repmat(dt(3:end-1),1,3);zeros(1,3)];
 JerkAmp = sqrt(sum(jEE.^2,2));
 plot(JerkAmp)
-id = JerkAmp>0.015;  % Thresholding
+title("jerk amplitude");
+id = JerkAmp>0.01;  % Thresholding
+figure;
 plot(ee_pos(:,2),0.5-ee_pos(:,1),'b.')
 hold on
 plot(ee_pos(id==1,2),0.5-ee_pos(id==1,1),'or')
-% return
+return
 
 figure(2)
 for i=100:length(id)

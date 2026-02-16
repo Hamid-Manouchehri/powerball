@@ -1,4 +1,4 @@
-clc;        close all;          clear
+clc;        clear;       %close all;
 
 dataDirName = '/home/hamid-tuf/projects/powerball/data/admittance_control/test_4_021126/';
 fName = [dataDirName 'hm_test_damp_100_damp_100.000000_01.csv'];  % TODO
@@ -44,7 +44,9 @@ for j=1:numDataSamples
 
 end
 
+figure;
 plot(t,difference)
+title("abs of the heuristic error");
 
 figure;
 plot(ee_pos(:, 2), ee_pos(:,1), 'b.');

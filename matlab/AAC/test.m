@@ -1,19 +1,27 @@
-clc; clear;
+clc; clear;  close all;
 
-% 1) Static symbols (no q(t))
-syms q1 q2 dq1 dq2 real
+Fs = 1000;            % Sampling frequency                    
+T = 1/Fs;             % Sampling period       
+L = 1500;             % Length of signal
+t = (0:L-1)*T;        % Time vector
 
-% 2) Matrix A(q)
-A = [ cos(q1),              sin(q2);
-      cos(q2)*cos(q1),      sin(q1) ];
+S = 0.8 + 0.7*sin(2*pi*50*t) + sin(2*pi*120*t);
+X = S + 2*randn(size(t));
 
-% 3) Chain rule using dq1,dq2
-dA_dt = diff(A,q1)*dq1 + diff(A,q2)*dq2;
+plot(1000*t,X)
+title("Signal Corrupted with Zero-Mean Random Noise")
+xlabel("t (milliseconds)")
+ylabel("X(t)")
 
-% 4) Save as a function file
-matlabFunction(dA_dt, ...
-    'File','dA_dt_fun', ...
-    'Vars',{[q1;q2],[dq1;dq2]});
+Y = fft(X);
+plot(Fs/L*(0:L-1),abs(Y),"LineWidth",3)
+title("Complex Magnitude of fft Spectrum")
+xlabel("f (Hz)")
+ylabel("|fft(X)|")
 
-% Example call:
-dA = dA_dt_fun([0.5;1.0],[0.2;-0.1]);
+x = -5:0.01:5;
+for i=1:5
+    y = normpdf(x, 0, i);
+    plot(x,y)
+    hold on
+end
