@@ -34,26 +34,45 @@ M_admit = 0.3*diag([1, 1, 1]);
 C_admit = 10*diag([1.2, 1.0, 1.0]);
 
 figure;
-subplot(1,2,1);
+subplot(3,1,1);
 plot(t, FT(:,1));
+xlabel("time (s)"); ylabel("F_x (N)");
 
-freq = floor(numDataSamples / t(end));  % sampling freq
-T = 1 / freq;  % sampling period
-L = numDataSamples;
+Fs = floor(numDataSamples / t(end));  % sampling freq
+T = 1 / Fs;  % sampling period
+L = numDataSamples;  % Length of signal
 
-subplot(1,2,2);
+subplot(3,1,2);
 FTx_fft = fft(FT(:,1));
 
 P2 = abs(FTx_fft/L);
 P1 = P2(1:floor(L/2)+1);
 P1(2:end-1) = 2*P1(2:end-1);
 
-f = freq/L*(0:floor(L/2));  % freq
+f = Fs/L*(0:floor(L/2));  % freq
 
 plot(f, P1,"-.","LineWidth",1);
+xlabel("f (Hz)"); ylabel("fft amplitude");
 xlim([0 20])
 ylim([0 3])
 
+x = FT(:,1) - mean(FT(:,1));
+X = fft(x);
+f = (0:L-1)*(Fs/L);
 
+% one-sided amplitude spectrum
+P2 = abs(X)/L;
+P1 = P2(1:floor(L/2)+1);
+P1(2:end-1) = 2*P1(2:end-1);
+f1 = f(1:floor(L/2)+1);
 
+mag_dB = 20*log10(P1 + eps);  % eps avoids -Inf
 
+subplot(3,1,3);
+semilogx(f1, mag_dB); grid on;
+xlabel('Frequency (Hz)'); ylabel('Magnitude (dB)');
+
+omega0 = 0.01;
+omegaC = 2*pi*3;  % cut-off frequency (rad/s)
+
+% for i = 1:

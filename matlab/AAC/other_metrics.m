@@ -1,4 +1,4 @@
-clc;        clear;         close all;
+clc;        clear;         %close all;
 
 dataDirName = '/home/hamid-tuf/projects/powerball/data/admittance_control/test_4_021126/';
 fName_damp10 = [dataDirName 'hm_test_damp_10_damp_10.000000_01.csv'];  % TODO
@@ -40,13 +40,15 @@ for i=2:numDataSamples-1
 end
 
 figure;
-plot(theta_F)
+plot(theta_F);
+ylabel("theta (rad)");
 
 figure;
 subplot(1,2,1);
 plot(FT(:, 1:3));
 legend("Fx", "Fy")
 title("force");
+
 subplot(1,2,2);
 plot(FTdot);
 legend("Fdx", "Fdy")
