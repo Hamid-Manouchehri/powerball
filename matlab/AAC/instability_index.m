@@ -42,20 +42,6 @@ Fs = floor(numDataSamples / t(end));  % sampling freq
 T = 1 / Fs;  % sampling period
 L = numDataSamples;  % Length of signal
 
-subplot(3,1,2);
-FTx_fft = fft(FT(:,1));
-
-P2 = abs(FTx_fft/L);
-P1 = P2(1:floor(L/2)+1);
-P1(2:end-1) = 2*P1(2:end-1);
-
-f = Fs/L*(0:floor(L/2));  % freq
-
-plot(f, P1,"-.","LineWidth",1);
-xlabel("f (Hz)"); ylabel("fft amplitude");
-xlim([0 20])
-ylim([0 3])
-
 x = FT(:,1) - mean(FT(:,1));
 X = fft(x);
 f = (0:L-1)*(Fs/L);
@@ -68,11 +54,44 @@ f1 = f(1:floor(L/2)+1);
 
 mag_dB = 20*log10(P1 + eps);  % eps avoids -Inf
 
-subplot(3,1,3);
+subplot(3,1,2);
 semilogx(f1, mag_dB); grid on;
 xlabel('Frequency (Hz)'); ylabel('Magnitude (dB)');
 
-omega0 = 0.01;
-omegaC = 2*pi*3;  % cut-off frequency (rad/s)
+f0 = 0.01;
+fc = 3;
+omega0 = 2*pi*f0;
+omegaC = 2*pi*fc;  % cut-off frequency (rad/s)
 
-% for i = 1:
+window_time = 0.1;  % seconds TODO
+num_sample_per_windows = round(window_time*numDataSamples/max(t));
+num_windows = round(max(t) / window_time);
+Is = zeros(num_windows,1);
+
+j = 1;
+N = size(FT,1);
+
+for i = 1:num_windows
+    idxEnd = j + num_sample_per_windows - 1;
+
+    if idxEnd > N
+        break;   % or error('Not enough data for last window')
+    end
+
+    x = FT(j:idxEnd, 1);
+    X = fft(x);
+
+    P2 = abs(X/num_sample_per_windows);
+    P1 = P2(1:floor(num_sample_per_windows/2)+1);
+    P1(2:end-1) = 2*P1(2:end-1);
+
+    id = P1 > fc;
+    Is(i) = sum(P1(id)) / sum(P1);
+
+    f = Fs/num_sample_per_windows*(0:floor(num_sample_per_windows/2));
+    j = j + num_sample_per_windows;
+end
+
+subplot(3,1,3)
+t_of_index = window_time:window_time:max(t);
+plot(t_of_index, Is)
