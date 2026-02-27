@@ -31,6 +31,14 @@ Vector<6,float> Qdot = Zeros;
 Vector<6,float> Qdot_a = Zeros;
 Vector<2,float> v_xy = Zeros;
 
+// global time for admittance loop (seconds)
+float adm_time = 0.0f;
+// oscillation parameters
+const float osc_start_time = 5.0f;    // start oscillation 5s after admittance start
+const float osc_duration   = 10.0f;    // oscillation lasts for 3s
+const float osc_omega      = 2.0f * M_PI * 0.5f; // angular frequency (0.5 Hz)
+const float osc_amplitude  = 0.01f;   // linear velocity amplitude [m/s]
+
 
 float Damp = 10;
 
@@ -112,6 +120,21 @@ void computations(){
     F_modified[0] = -FT[3]*10.0f;
     F_modified[1] = -FT[4]*10.0f;
 
+    // add oscillatory component along user-applied force direction after a delay
+    // the oscillation is aligned with the planar external force vector (F_modified[0], F_modified[1])
+    if (adm_time >= osc_start_time && adm_time < (osc_start_time + osc_duration))
+    {
+        float t_rel = adm_time - osc_start_time;
+        float osc = osc_amplitude * sinf(osc_omega * t_rel);
+        float fx = F_modified[0];
+        float fy = F_modified[1];
+        float norm_f = sqrtf(fx*fx + fy*fy);
+        if (norm_f > 1e-4f)
+        {
+            F_modified[0] += osc * fx / norm_f;
+            F_modified[1] += osc * fy / norm_f;
+        }
+    }
 
     // no adaptation
     //vel = vel + dt*(Md_inv*(Rmat*(R_F_offset*F_modified)) - Md_inv*Cd*vel);
@@ -260,6 +283,9 @@ int main(int argc, char** argv)
     while((cnt<90/dt) && (!stop_flag))
     {
         timeLoop = std::chrono::system_clock::now();
+
+        // update global admittance time (seconds) for oscillatory motion
+        adm_time = cnt * dt;
 
         boost::thread threaded_computation(computations);
 
