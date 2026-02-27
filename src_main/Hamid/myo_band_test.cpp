@@ -317,7 +317,7 @@ int main(int argc, char** argv)
 
     struct stat info;
     std::string folderpath;
-    folderpath = "../data/hamid/emg_test/";  # TODO
+    folderpath = "../data/hamid/emg_test/";
 
     const char *path1 = folderpath.c_str();
 
