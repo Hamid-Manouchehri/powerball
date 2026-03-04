@@ -7,6 +7,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <unistd.h>
@@ -25,16 +26,27 @@
 #include <TooN/LU.h>
 #include <TooN/SVD.h>
 
+// Myo band headers
+#include "myolinux/myoclient.h"
+#include "myolinux/serial.h"
+
 using namespace std;
 using boost::asio::ip::tcp;
 using namespace TooN;
+using namespace myolinux;
 
 // -------------------- Globals (shared between threads) --------------------
-Vector<6,float> FT = Zeros;
+// FT is defined in powerball_utils.cpp and shared across the program.
+extern Vector<6,float> FT;
 simxFloat newPos[3] = {0.0f, 0.439f, 0.275f};
 
 // Control loop
 static const float dt = 0.005f;
+
+// Set to true to read and record Myo band (EMG/IMU) to a separate CSV; false to skip Myo.
+static const bool USE_MYO = true;  // TODO
+// Admittance parameters
+float Damp = 10.0f;  // TODO
 
 Vector<6,float> Q      = Zeros;
 Vector<6,float> Qe     = Zeros;
@@ -50,8 +62,6 @@ const float osc_duration   = 10.0f;
 const float osc_omega      = 2.0f * M_PI * 0.5f; // 0.5 Hz
 const float osc_amplitude  = 0.01f;              // [m/s]
 
-// Admittance parameters
-float Damp = 10.0f;
 
 Vector<6,float> Md_diag = makeVector(1,1,1,1,1,1) * 0.3f;
 Matrix<6,6,double> Md_inv = Md_diag.as_diagonal();
@@ -111,6 +121,75 @@ int vrep_draw(bool* stopFlag)
         usleep(40 * 1000);
     }
     return 0;
+}
+
+// -------------------- Myo logging (separate file) --------------------
+
+void Myo_log(bool* stopFlag, std::string subject)
+{
+    // Create local Myo client used only in this thread
+    myolinux::myo::Client client(myolinux::Serial{"/dev/ttyACM0", 115200});
+
+    client.connect();
+    if (!client.connected())
+    {
+        cout << "Unable to connect to Myo band" << endl;
+        return;
+    }
+
+    client.setSleepMode(myolinux::myo::SleepMode::NeverSleep);
+    client.setMode(myolinux::myo::EmgMode::SendEmg,
+                   myolinux::myo::ImuMode::SendData,
+                   myolinux::myo::ClassifierMode::Disabled);
+
+    int   emg[8]  = {0};
+    float ori[4]  = {0};
+    float acc[3]  = {0};
+    float gyr[3]  = {0};
+
+    client.onEmg([&](myolinux::myo::EmgSample sample)
+    {
+        for (int i = 0; i < 8; ++i)
+            emg[i] = sample[i];
+    });
+
+    client.onImu([&](myolinux::myo::OrientationSample o,
+                     myolinux::myo::AccelerometerSample a,
+                     myolinux::myo::GyroscopeSample g)
+    {
+        for (int i = 0; i < 4; ++i)
+        {
+            ori[i] = o[i];
+            if (i < 3)
+            {
+                acc[i] = a[i];
+                gyr[i] = g[i];
+            }
+        }
+    });
+
+    std::string myo_path = "/home/srisadha/powerball/data/Hamid/admittance/" + subject + "_myo.csv";
+    std::ofstream myoFile(myo_path);
+    myoFile << "Time_us,"
+            << "EMG1,EMG2,EMG3,EMG4,EMG5,EMG6,EMG7,EMG8,"
+            << "ORI1,ORI2,ORI3,ORI4,"
+            << "ACC1,ACC2,ACC3,"
+            << "GYR1,GYR2,GYR3\n";
+
+    while (!(*stopFlag))
+    {
+        client.listen(); // blocks until a packet arrives and triggers callbacks
+
+        long long t = now_us();
+
+        myoFile << t;
+        for (int i = 0; i < 8; ++i) myoFile << "," << emg[i];
+        myoFile << "," << ori[0] << "," << ori[1] << "," << ori[2] << "," << ori[3]
+                << "," << acc[0] << "," << acc[1] << "," << acc[2]
+                << "," << gyr[0] << "," << gyr[1] << "," << gyr[2] << "\n";
+    }
+
+    myoFile.close();
 }
 
 // Compute admittance -> Qdot
@@ -229,6 +308,17 @@ void TCP_receive(bool* stopFlag)
 // -------------------- main --------------------
 int main(int argc, char** argv)
 {
+    // Myo: default from USE_MYO, override with -no-myo / --no-myo
+    bool use_myo = USE_MYO;
+    for (int i = 1; i < argc; i++)
+    {
+        if (strcmp(argv[i], "-no-myo") == 0 || strcmp(argv[i], "--no-myo") == 0)
+        {
+            use_myo = false;
+            break;
+        }
+    }
+
     string SubName;
     cout << "What is subject name? ";
     cin >> SubName;
@@ -238,11 +328,16 @@ int main(int argc, char** argv)
     // Threads stop flag
     bool stop_flag = false;
 
+    // Myo logging thread (only if use_myo is true)
+    boost::thread myo_thread;
+    if (use_myo)
+        myo_thread = boost::thread(Myo_log, &stop_flag, SubName);
+
     // V-REP thread
     boost::thread vrep_thread(vrep_draw, &stop_flag);
 
     // Log file
-    std::string filepath = "../data/hamid/exp_1/" + SubName + "_damp_" + std::to_string((int)Damp) + "_01.csv";
+    std::string filepath = "/home/srisadha/powerball/data/Hamid/admittance/" + SubName + "_damp_" + std::to_string((int)Damp) + "_schunk.csv";
     std::ofstream dataFile(filepath);
     dataFile << "Time_us,"
              << "Q1,Q2,Q3,Q4,Q5,Q6,"
@@ -326,6 +421,8 @@ int main(int argc, char** argv)
 
     stop_flag = true; // tell threads to exit
 
+    if (myo_thread.joinable())
+        myo_thread.interrupt();
     FT_thread.interrupt();
     stop_thread.interrupt();
     vrep_thread.interrupt();
