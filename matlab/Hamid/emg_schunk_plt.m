@@ -1,62 +1,83 @@
 clc; clear; close all;
 
-
-schunk_csv = "/home/hamid-tuf/projects/powerball/data/admittance/test_damp_50_01.csv";
-emg_csv = "/home/hamid-tuf/projects/powerball/data/admittance/test_myo.csv";
+schunk_csv = "/home/hamid-tuf/projects/powerball/data/admittance/highDamp_damp_100_schunk.csv";
+myo_csv = "/home/hamid-tuf/projects/powerball/data/admittance/highDamp_myo.csv";
 
 schunk_table = readtable(schunk_csv);
 schunk_time_s = (schunk_table.Time_us - schunk_table.Time_us(1)) / 1e6;
-emg_table = readtable(emg_csv);
-emg_time_s = (emg_table.Time_us - emg_table.Time_us(1)) / 1e6;
+myo_table = readtable(myo_csv);
+myo_time_s = (myo_table.Time_us - myo_table.Time_us(1)) / 1e6;
 
+Q   = schunk_table{:,2:7}; 
+Qd  = schunk_table{:,8:13}; 
+FT  = schunk_table{:,14:19};
+vel = schunk_table{:,20:25};  % end-effector
+schunk_numOfDataSamples = size(Q, 1);
 
+myo_EMG    = myo_table{:,2:9}; 
+myo_orient = myo_table{:,10:13};  % quaternion (w, q1, q2, q3)
+myo_accel  = myo_table{:,14:16};
+myo_gyr    = myo_table{:,17:19};
+myo_numOfDataSamples = size(myo_EMG, 1);
+
+% plotting EEG:
 figure;
 sgtitle("EMG data");
 for i=1:8
-
     subplot(4,2,i);
-    field_name = sprintf('EMG%d', i);
-    emg_data = emg_table.(field_name);
-    plot(emg_time_s, emg_data);
-    legend;
-
+    plot(myo_time_s, myo_EMG(:,i));
 end
 
+myo_orient_eul = zeros(size(myo_table,1), 3);
+myo_ang_vel = zeros(size(myo_table,1), 3);
+myo_lin_accel = zeros(size(myo_table,1), 3);
 
-orient_eul = zeros(size(emg_table,1), 3);
-ang_vel = zeros(size(emg_table,1), 3);
-lin_accel = zeros(size(emg_table,1), 3);
-
-for i=1:size(emg_table,1)
-
-    orient_eul(i,:) = quat_to_euler_fcn([emg_table.ORI1(i), emg_table.ORI2(i), ...
-                                         emg_table.ORI3(i), emg_table.ORI4(i)]);
-    ang_vel(i,:) = [emg_table.GYR1(i), emg_table.GYR2(i), emg_table.GYR3(i)];
-    lin_accel(i,:) = [emg_table.ACC1(i), emg_table.ACC2(i), emg_table.ACC3(i)];
-
+% Extracting myo data and converting to euler:
+for i=1:size(myo_table,1)
+    myo_orient_eul(i,:) = quat_to_euler_fun([myo_orient(i, 1), myo_orient(i, 2), ...
+                                             myo_orient(i, 3), myo_orient(i, 4)]);
+    myo_ang_vel(i,:) = [myo_gyr(i, 1), myo_gyr(i, 2), myo_gyr(i, 3)];
+    myo_lin_accel(i,:) = [myo_accel(i, 1), myo_accel(i, 2), myo_accel(i, 3)];
 end
 
 figure;
 sgtitle("IMU data");
 subplot(3,1,1);
-plot(emg_time_s, orient_eul); ylabel("orientation");
+plot(myo_time_s, myo_orient_eul); ylabel("orientation (rad)");
 subplot(3,1,2);
-plot(emg_time_s, ang_vel); ylabel("ang vel");
+plot(myo_time_s, myo_ang_vel); ylabel("ang vel (rad/s)");
 subplot(3,1,3);
-plot(emg_time_s, lin_accel); ylabel("lin accel");
+plot(myo_time_s, myo_lin_accel); ylabel("lin accel (m/s^2)");
 
 
 figure;
 sgtitle("Schunk Data");
 subplot(4,1,1);
-plot(schunk_time_s, schunk_table{:,2:7}); ylabel("Q (rad)"); 
+plot(schunk_time_s, Q); ylabel("Q (rad)"); 
 legend(["Q1", "Q2", "Q3", "Q4", "Q5", "Q6"]);
 subplot(4,1,2);
-plot(schunk_time_s, schunk_table{:,8:13}); ylabel("ang vel (rad/s)");
-legend(["dQ1", "dQ2", "dQ3", "dQ4", "dQ5", "dQ6"]);
+plot(schunk_time_s, Qd); ylabel("Qd (rad/s)");
+legend(["Qd1", "Qd2", "Qd3", "Qd4", "Qd5", "Qd6"]);
 subplot(4,1,3);
-plot(schunk_time_s, schunk_table{:,14:16}); ylabel("Force (N)");
+plot(schunk_time_s, FT(:,1:3)); ylabel("Force (N)");
 legend(["Fx", "Fy", "Fz"]);
 subplot(4,1,4);
-plot(schunk_time_s, schunk_table{:,20:22}); ylabel("tool vel (m/s)");
+plot(schunk_time_s, vel(:,1:3)); ylabel("tool vel (m/s)");
 legend(["Vx", "Vy", "Vz"]);
+
+ee_pos   = zeros(schunk_numOfDataSamples,3);
+ee_rot   = zeros(schunk_numOfDataSamples,3);
+ee_vel   = zeros(schunk_numOfDataSamples,6);
+
+% Extracting cartesian space data from schunk:
+for i = 1:schunk_numOfDataSamples
+    ee_vel(i, :) = Qd(i, :)*transpose(Jacob_schunk_fun(Q(i, :)));
+    T = FK_schunk_fun(Q(i, :));
+    T = T';
+    ee_rot(i, :) = rotm2eul(T(1:3,:), 'ZYX');  % [yaw pitch roll] in radians
+    ee_pos(i, :) = T(4, :);
+end
+
+figure;
+title("Maze path");
+plot(ee_pos(:,2), ee_pos(:,1), 'b.');

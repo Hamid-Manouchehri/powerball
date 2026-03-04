@@ -1,4 +1,4 @@
-function euler = quat_to_euler_fcn(q)
+function euler = quat_to_euler_fun(q)
 
     % q = [w x y z]
     
