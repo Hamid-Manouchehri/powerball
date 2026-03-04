@@ -1,111 +1,102 @@
-// Clean version: Myo + FT + Schunk Powerball admittance + (optional) V-REP visualization
-// Removed: ALL VSM/dynamixel stuff
-// Added: NO new libraries (only removed unused ones)
+// Cleaned version (NO new libraries added)
+// - Removed unused pieces (sgn, timeval/gettimeofday timestamp)
+// - Removed "thread per loop iteration" (computations now called directly)
+// - Made V-REP thread stoppable
+// - Made TCP receive thread stoppable (checks stop flag)
+// - Kept the same libraries you already included
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <fstream>
 #include <iostream>
 #include <unistd.h>
-#include <chrono>
-#include <ostream>
-#include <typeinfo>
 
-// boost headers (keep, because you already use boost::thread)
 #include <boost/thread.hpp>
 #include <boost/asio.hpp>
 #include <boost/array.hpp>
 #include <boost/lexical_cast.hpp>
 
-// schunk powerball + vrep + utils
+#include <chrono>
+
 #include "powerball/schunk_powerball.h"
 #include "vrep/v_repClass.h"
 #include "powerball/schunk_kinematics.h"
-#include "utils/utils.h"
-#include "utils/powerball_utils.h"
 
-// Toon headers
 #include <TooN/LU.h>
 #include <TooN/SVD.h>
 
-// myo band headers
-#include "myolinux/myoclient.h"
-#include "myolinux/serial.h"
-
 using namespace std;
+using boost::asio::ip::tcp;
 using namespace TooN;
-using namespace myolinux;
 
-// -------------------- User settings --------------------
-static const float dt = 0.005f;                 // control loop time step [s]
-static const char* MYO_PORT = "/dev/ttyACM0";   // myo serial device
-static const int   MYO_BAUD = 115200;
-
-static const std::string DATA_DIR = "../data/no_vsm/peg-hole"; // make this folder manually
-// -------------------------------------------------------
-
-// -------------------- Global shared states --------------------
-
-// Myo client (one instance only)
-myo::Client client(Serial{MYO_PORT, MYO_BAUD});
-
-// Myo data
-Vector<8, int>   EMG = Zeros;
-Vector<4, float> ORI = Zeros;
-Vector<3, float> ACC = Zeros;
-Vector<3, float> GYR = Zeros;
-
-// Robot state
-Vector<6, float> Q     = Zeros;    // joint position
-Vector<6, float> Qs    = Zeros;
-Vector<6, float> Qe    = Zeros;
-Vector<6, float> Qdot  = Zeros;    // commanded joint velocity
-Vector<6, float> Qdot_a= Zeros;    // measured joint velocity
-Vector<3, float> X     = Zeros;    // end-effector position
-Vector<3, float> X_init= Zeros;
-
-// V-REP visualization point (sphere)
+// -------------------- Globals (shared between threads) --------------------
+Vector<6,float> FT = Zeros;
 simxFloat newPos[3] = {0.0f, 0.439f, 0.275f};
 
-// Logging control (when true, Myo thread writes)
-bool Start_record = false;
+// Control loop
+static const float dt = 0.005f;
 
-// Admittance parameters (simple diagonal)
-Vector<6, float> Md_diag = makeVector(1,1,1,1,1,1) * 0.05f;
-Matrix<6,6, double> Md_inv = Md_diag.as_diagonal();
+Vector<6,float> Q      = Zeros;
+Vector<6,float> Qe     = Zeros;
+Vector<6,float> Qdot   = Zeros;
+Vector<6,float> Qdot_a = Zeros;
 
-Vector<6, float> Cd_diag = makeVector(200,200,200,200,200,200); // default high damping
-Matrix<6,6, double> Cd;
+// Admittance time (seconds)
+float adm_time = 0.0f;
 
-Vector<6, float> vel = Zeros; // end-effector velocity state for admittance
+// Oscillation parameters
+const float osc_start_time = 5.0f;
+const float osc_duration   = 10.0f;
+const float osc_omega      = 2.0f * M_PI * 0.5f; // 0.5 Hz
+const float osc_amplitude  = 0.01f;              // [m/s]
 
-// FT sensor vector is assumed to be provided by your existing codebase.
-// (It was used in your original code too.)
-extern Vector<6, float> FT;
+// Admittance parameters
+float Damp = 10.0f;
+
+Vector<6,float> Md_diag = makeVector(1,1,1,1,1,1) * 0.3f;
+Matrix<6,6,double> Md_inv = Md_diag.as_diagonal();
+
+Vector<6,float> Cd_diag = makeVector(1.2f,1.0f,1.0f,1.0f,1.0f,1.0f) * Damp;
+Matrix<6,6,double> Cd = Cd_diag.as_diagonal();
+
+Vector<6,float> vel = Zeros;
+
+// Fixed force-frame rotation offset
+Matrix<6,6,float> R_F_offset = Data(
+    cos(M_PI/2), -sin(M_PI/2), 0,  0,0,0,
+    sin(M_PI/2),  cos(M_PI/2), 0,  0,0,0,
+    0,            0,           1,  0,0,0,
+    0,0,0,  cos(M_PI/2), -sin(M_PI/2), 0,
+    0,0,0,  sin(M_PI/2),  cos(M_PI/2), 0,
+    0,0,0,  0,            0,           1
+);
 
 // -------------------- Small helpers --------------------
-
-// returns current time in microseconds since epoch
 static long long now_us()
 {
     using namespace std::chrono;
     return duration_cast<microseconds>(system_clock::now().time_since_epoch()).count();
 }
 
-// Stop thread: press Enter to stop program
+static void sleep_to_keep_dt(std::chrono::time_point<std::chrono::system_clock> t0)
+{
+    using namespace std::chrono;
+    duration<float> elapsed = system_clock::now() - t0;
+    float sleep_s = dt - elapsed.count();
+    if (sleep_s > 0) usleep((useconds_t)(sleep_s * 1e6));
+}
+
+// Stop thread: press Enter
 void stop(bool* stopFlag)
 {
     char in;
     cin.get(in);
     *stopFlag = true;
-    Start_record = false;
 }
 
-// Optional V-REP thread: draws a sphere at newPos
+// V-REP thread (stoppable)
 int vrep_draw(bool* stopFlag)
 {
-    if (*stopFlag) return 0;
-
     V_rep vrep;
     int res = vrep.connect();
     if (res == -1)
@@ -122,318 +113,227 @@ int vrep_draw(bool* stopFlag)
     return 0;
 }
 
-// -------------------- Myo --------------------
-
-void Myo_init()
-{
-    client.connect();
-    if (!client.connected())
-    {
-        cout << "Unable to connect to Myo band" << endl;
-        exit(1);
-    }
-    cout << "Myo connected" << endl;
-
-    client.setSleepMode(myo::SleepMode::NeverSleep);
-    client.setMode(myo::EmgMode::SendEmg,
-                   myo::ImuMode::SendData,
-                   myo::ClassifierMode::Disabled);
-
-    client.onEmg([](myo::EmgSample sample)
-    {
-        for (size_t i = 0; i < 8; i++)
-            EMG[i] = static_cast<int>(sample[i]);
-    });
-
-    client.onImu([](myo::OrientationSample ori,
-                    myo::AccelerometerSample acc,
-                    myo::GyroscopeSample gyr)
-    {
-        for (size_t i = 0; i < 4; i++)
-        {
-            ORI[i] = ori[i];
-            if (i < 3)
-            {
-                ACC[i] = acc[i];
-                GYR[i] = gyr[i];
-            }
-        }
-    });
-}
-
-// Myo logger thread: writes EMG + IMU continuously when Start_record=true
-void Myo_receive(bool* stopFlag)
-{
-    std::ofstream EMGFile(DATA_DIR + "/EMG.csv");
-    std::ofstream IMUFile(DATA_DIR + "/IMU.csv");
-
-    EMGFile << "Time_us,EMG1,EMG2,EMG3,EMG4,EMG5,EMG6,EMG7,EMG8\n";
-    IMUFile << "Time_us,ORI1,ORI2,ORI3,ORI4,ACC1,ACC2,ACC3,GYR1,GYR2,GYR3\n";
-
-    while (!(*stopFlag))
-    {
-        try
-        {
-            client.listen(); // blocks until a Myo packet arrives (calls callbacks)
-
-            if (!Start_record) continue;
-
-            long long t = now_us();
-
-            EMGFile << t
-                    << "," << EMG[0] << "," << EMG[1] << "," << EMG[2] << "," << EMG[3]
-                    << "," << EMG[4] << "," << EMG[5] << "," << EMG[6] << "," << EMG[7] << "\n";
-
-            IMUFile << t
-                    << "," << ORI[0] << "," << ORI[1] << "," << ORI[2] << "," << ORI[3]
-                    << "," << ACC[0] << "," << ACC[1] << "," << ACC[2]
-                    << "," << GYR[0] << "," << GYR[1] << "," << GYR[2] << "\n";
-        }
-        catch (myo::DisconnectedException&)
-        {
-            cout << "MYO Disconnected" << endl;
-        }
-    }
-
-    EMGFile.close();
-    IMUFile.close();
-}
-
-// 10s EMG calibration logger
-void EMG_calib(bool* calibFlag)
-{
-    std::ofstream EMGFile(DATA_DIR + "/emg_calib.csv");
-    EMGFile << "Time_us,EMG1,EMG2,EMG3,EMG4,EMG5,EMG6,EMG7,EMG8\n";
-
-    auto t0 = std::chrono::steady_clock::now();
-
-    while (*calibFlag)
-    {
-        client.listen();
-
-        long long t = now_us();
-        EMGFile << t
-                << "," << EMG[0] << "," << EMG[1] << "," << EMG[2] << "," << EMG[3]
-                << "," << EMG[4] << "," << EMG[5] << "," << EMG[6] << "," << EMG[7] << "\n";
-
-        float elapsed = std::chrono::duration<float>(std::chrono::steady_clock::now() - t0).count();
-        if (elapsed > 10.0f) *calibFlag = false;
-    }
-
-    EMGFile.close();
-}
-
-// -------------------- Admittance computation --------------------
-// Reads current Q, FT -> computes vel -> computes Qdot using Jacobian pseudoinverse
-void admittance_compute()
+// Compute admittance -> Qdot
+void computations()
 {
     Kin kin;
 
     Matrix<6,6,float> J = Zeros;
-    Matrix<3,3,float> Rb_e = Zeros;
+    Matrix<3,3,float> R = Zeros;
+    Matrix<6,6,float> Rmat = Zeros;
+    Vector<3,float> X = Zeros;
 
-    // 1) Kinematics
+    // Kinematics
     kin.Jacob(Q, &J);
-    kin.FK_R(Q, &Rb_e);
+    kin.FK_R(Q, &R);
     kin.FK_pos(Q, &X);
 
-    // 2) Update V-REP sphere (simple mapping)
-    newPos[0] = -(X[1] - X_init[1]) + 0.06f;
-    newPos[1] =  (X[0] - X_init[0]) + 0.439f;
-    newPos[2] = 0.01f;
+    // update V-REP visualization
+    newPos[0] = -X[1];
+    newPos[1] =  X[0];
+    newPos[2] =  X[2];
 
-    // 3) Force transform (FT frame -> base frame). Keep your original fixed rotation.
-    Matrix<3,3,float> Re_f = Data(cos(-M_PI/4), -sin(-M_PI/4), 0,
-                                  sin(-M_PI/4),  cos(-M_PI/4), 0,
-                                  0,            0,           1);
+    // build 6x6 rotation block matrix from R
+    Rmat.slice<0,0,3,3>() = R;
+    Rmat.slice<3,3,3,3>() = R;
 
-    Matrix<6,6,float> Rb_e_mat = Zeros;
-    Matrix<6,6,float> Re_f_mat = Zeros;
-    Rb_e_mat.slice<0,0,3,3>() = Rb_e;
-    Rb_e_mat.slice<3,3,3,3>() = Rb_e;
-    Re_f_mat.slice<0,0,3,3>() = Re_f;
-    Re_f_mat.slice<3,3,3,3>() = Re_f;
+    // Use only planar forces derived from FT moments (your original logic)
+    Vector<6,float> F_modified = Zeros;
+    F_modified[0] = -FT[3] * 10.0f;
+    F_modified[1] = -FT[4] * 10.0f;
 
-    Vector<6,float> FT_local = FT;
-    FT_local.slice<3,3>() = Zeros; // ignore moments -> no rotation
+    // Add oscillation along the applied planar force direction
+    if (adm_time >= osc_start_time && adm_time < (osc_start_time + osc_duration))
+    {
+        float t_rel = adm_time - osc_start_time;
+        float osc = osc_amplitude * sinf(osc_omega * t_rel);
 
-    Vector<6,float> F_modified = Rb_e_mat * Re_f_mat * FT_local;
+        float fx = F_modified[0];
+        float fy = F_modified[1];
+        float n  = sqrtf(fx*fx + fy*fy);
 
-    // 4) Admittance dynamics: vel += dt * (M^-1(F - C vel))
-    vel = vel + dt * (Md_inv * F_modified - Md_inv * Cd * vel);
-    vel.slice<3,3>() = Zeros; // make sure angular vel is zero
+        if (n > 1e-4f)
+        {
+            F_modified[0] += osc * fx / n;
+            F_modified[1] += osc * fy / n;
+        }
+    }
 
-    // 5) Convert Cartesian vel to joint vel: J * Qdot = vel
+    // Geometrical adaptation (your original)
+    float C1 = 0.075f, C2 = 0.125f;
+    float alpha = 1.0f;
+    float xx = 0.0f;
+
+    if (X[1] <= C1)
+    {
+        alpha = 1.0f;
+    }
+    else if (X[1] < C2)
+    {
+        xx = (X[1] - C1) * 4.0f / (C2 - C1) - 2.0f;
+        alpha = tanh(xx) / 0.964f * 1.5f + 2.5f;
+    }
+    else
+    {
+        alpha = 3.5f;
+    }
+
+    // Admittance: vel += dt * (M^-1 * (R*offset*F) - M^-1 * alpha*C*vel)
+    vel = vel + dt * (Md_inv * (Rmat * (R_F_offset * F_modified)) - Md_inv * (alpha * Cd) * vel);
+
+    // Solve J * Qdot = vel using SVD pseudo-inverse
     SVD<6,6,float> svdJ(J);
     Qdot = svdJ.backsub(vel);
 }
 
-// ---------------------------- MAIN ----------------------------
+// TCP FT receive thread (stoppable)
+void TCP_receive(bool* stopFlag)
+{
+    boost::asio::io_service io_service;
+    tcp::endpoint sender_endpoint(
+        boost::asio::ip::address::from_string("192.168.1.30"),
+        boost::lexical_cast<int>("1000")
+    );
+
+    tcp::socket socket(io_service);
+    socket.connect(sender_endpoint);
+
+    boost::system::error_code ignored_error;
+    char recv_buf[128];
+
+    // TARE
+    {
+        std::string msg = "TARE(1)\n";
+        socket.write_some(boost::asio::buffer(msg, msg.size()), ignored_error);
+        socket.read_some(boost::asio::buffer(recv_buf), ignored_error);
+    }
+
+    // Continuous stream
+    {
+        std::string msg = "L1()\n";
+        socket.write_some(boost::asio::buffer(msg, msg.size()), ignored_error);
+        socket.read_some(boost::asio::buffer(recv_buf), ignored_error);
+    }
+
+    while (!(*stopFlag))
+    {
+        int len = socket.read_some(boost::asio::buffer(recv_buf), ignored_error);
+        if (len <= 0) continue;
+
+        int timeStamp = 0;
+        sscanf(recv_buf, "F={%f,%f,%f,%f,%f,%f},%d",
+               &FT[0], &FT[1], &FT[2], &FT[3], &FT[4], &FT[5], &timeStamp);
+    }
+}
+
+// -------------------- main --------------------
 int main(int argc, char** argv)
 {
-    bool use_vrep = true;
-    bool calib_mode = false;
-    bool stopFlag = false;
-    bool FT_calibrated = false;
+    string SubName;
+    cout << "What is subject name? ";
+    cin >> SubName;
+    cout << "Please wait " << SubName << endl;
+    cin.get(); // consume newline
 
-    // CLI: -h, -calib, ld, hd
-    if (argc > 1)
-    {
-        if (strcmp(argv[1], "-h") == 0)
-        {
-            cout << "Usage:\n";
-            cout << "  ./admittance -calib\n";
-            cout << "  ./admittance ld\n";
-            cout << "  ./admittance hd\n";
-            return 0;
-        }
-        if (strcmp(argv[1], "-calib") == 0)
-        {
-            calib_mode = true;
-        }
-        if (strcmp(argv[1], "ld") == 0)
-        {
-            Cd_diag = makeVector(80.0f,80.0f,200.0f,200.0f,200.0f,200.0f);
-            cout << "Damping: LOW\n";
-        }
-        if (strcmp(argv[1], "hd") == 0)
-        {
-            Cd_diag = makeVector(200.0f,200.0f,200.0f,200.0f,200.0f,200.0f);
-            cout << "Damping: HIGH\n";
-        }
-    }
-    Cd = Cd_diag.as_diagonal();
+    // Threads stop flag
+    bool stop_flag = false;
 
-    // 1) Init Myo
-    Myo_init();
+    // V-REP thread
+    boost::thread vrep_thread(vrep_draw, &stop_flag);
 
-    // Calibration only
-    if (calib_mode)
-    {
-        cout << "EMG calibration for 10 seconds...\n";
-        bool calibFlag = true;
-        boost::thread Calib_thread(EMG_calib, &calibFlag);
-        Calib_thread.join();
-        cout << "Done.\n";
-        return 0;
-    }
+    // Log file
+    std::string filepath = "../data/hamid/exp_1/" + SubName + "_damp_" + std::to_string((int)Damp) + "_01.csv";
+    std::ofstream dataFile(filepath);
+    dataFile << "Time_us,"
+             << "Q1,Q2,Q3,Q4,Q5,Q6,"
+             << "dQ1,dQ2,dQ3,dQ4,dQ5,dQ6,"
+             << "FT1,FT2,FT3,FT4,FT5,FT6,"
+             << "Vx,Vy,Vz,omega_x,omega_y,omega_z\n";
 
-    // 2) Start Myo logger thread
-    boost::thread Myo_thread(Myo_receive, &stopFlag);
-
-    // 3) Optional V-REP thread
-    boost::thread vrep_thread;
-    if (use_vrep)
-        vrep_thread = boost::thread(vrep_draw, &stopFlag);
-
-    // 4) Stop thread (press Enter)
-    boost::thread stop_thread(stop, &stopFlag);
-
-    // 5) FT sensor thread (your existing function)
-    // IMPORTANT: Robotiq_ft_receive expects (float, bool, bool*, bool*)
-    boost::thread FT_thread(Robotiq_ft_receive, dt, true, &stopFlag, &FT_calibrated);
-    while (!FT_calibrated) {} // wait until FT is calibrated
-
-    // 6) Robot init + move to start pose
+    // Robot connect
     SchunkPowerball pb;
-    Kin kin;
-    pb.update();
-
-    Qs = pb.get_pos();
-    Qe = makeVector(-30.0f,-10.0f,95.0f,0.0f,74.0f,105.0f) * (float)(M_PI/180.0);
-
-    vector<vector<double>> matrix;
-    float T_travel = calculate_travel_time(Qs, Qe, 5);
-    cout << "Travel time to start pose: " << T_travel << " sec\n";
-
-    kin.HerInter(Qs, Zeros, Qe, dt, T_travel, &matrix);
-
-    std::chrono::time_point<std::chrono::system_clock> timeLoop;
-    std::chrono::duration<float> elaps_loop;
-
-    Vector<6,float> Q_interm = Zeros;
-
-    for (int i = 0; i < (int)matrix.size(); i++)
-    {
-        timeLoop = std::chrono::system_clock::now();
-
-        for (int j = 0; j < 6; j++)
-            Q_interm[j] = (float)matrix[i][j];
-
-        pb.set_pos(Q_interm);
-        pb.update();
-
-        elaps_loop = std::chrono::system_clock::now() - timeLoop;
-        float sleep_s = dt - elaps_loop.count();
-        if (sleep_s > 0) usleep((useconds_t)(sleep_s * 1e6));
-    }
-
     pb.update();
     Q = pb.get_pos();
-    kin.FK_pos(Q, &X_init);
+
+    // Stop thread
+    boost::thread stop_thread(stop, &stop_flag);
+
+    // Go to start pose (simple cosine blend)
+    Qe = Data(0.0f, -M_PI/6, M_PI/2, 0.0f, M_PI/3, 0.0f);
+    Vector<6,float> dQ = Qe - Q;
+
+    float maxq = 0.0f;
+    for (int i = 0; i < 6; i++) maxq = std::max(maxq, (float)fabs(dQ[i]));
+
+    float Ttravel = std::max(1.0f, maxq * 3.0f);
+    int itNum = (int)(Ttravel / dt);
+
+    Vector<6,float> Qhold = Q;
+    for (int k = 1; k <= itNum && !stop_flag; k++)
+    {
+        float s = (1.0f - cos((float)k / (float)itNum * (float)M_PI)) * 0.5f;
+        Vector<6,float> Qt = s * dQ + Qhold;
+
+        pb.set_pos(Qt);
+        pb.update();
+        Q = pb.get_pos();
+        usleep((useconds_t)(dt * 1e6));
+    }
 
     // Velocity mode
-    pb.set_sdo_controlword(NODE_ALL, STATUS_OPERATION_ENABLED);
     pb.set_control_mode(MODES_OF_OPERATION_VELOCITY_MODE);
     pb.update();
 
-    // 7) Main log file (NO VSM fields)
-    std::ofstream dataFile(DATA_DIR + "/admittance.csv");
-    dataFile << "Time_us,"
-             << "Q1,Q2,Q3,Q4,Q5,Q6,"
-             << "Qdot1,Qdot2,Qdot3,Qdot4,Qdot5,Qdot6,"
-             << "x,y,z,"
-             << "xdot,ydot,zdot,"
-             << "FT1,FT2,FT3,FT4,FT5,FT6\n";
+    // FT thread
+    boost::thread FT_thread(TCP_receive, &stop_flag);
 
-    cout << "Admittance loop started. Press Enter to stop.\n";
+    cout << "Admittance loop started! (press Enter to stop)\n";
 
-    // start Myo logging too
-    Start_record = true;
+    // Run for 90 seconds max (same behavior as your old cnt<90/dt)
+    const int max_steps = (int)(90.0f / dt);
 
-    // 8) Control loop
-    while (!stopFlag)
+    for (int cnt = 0; cnt < max_steps && !stop_flag; cnt++)
     {
-        timeLoop = std::chrono::system_clock::now();
+        auto t0 = std::chrono::system_clock::now();
 
+        adm_time = cnt * dt;
+
+        // Update robot state first
         pb.update();
         Q = pb.get_pos();
         Qdot_a = pb.get_vel();
 
-        // compute Qdot from FT
-        admittance_compute();
+        // Compute Qdot (NO thread creation here)
+        computations();
 
-        // safety saturation
-        if (TooN::norm_inf(Qdot) > 50.0f * (float)(M_PI/180.0))
-            Qdot = Zeros;
-
-        pb.set_vel(Qdot);
+        // Velocity saturation (same threshold you used)
+        if (TooN::norm_inf(Qdot) <= 32.5f * (float)M_PI / 180.0f)
+            pb.set_vel(Qdot);
 
         // log
-        long long t = now_us();
-        dataFile << t << ","
+        long long t_us = now_us();
+        dataFile << t_us << ","
                  << Q[0] << "," << Q[1] << "," << Q[2] << "," << Q[3] << "," << Q[4] << "," << Q[5] << ","
-                 << Qdot[0] << "," << Qdot[1] << "," << Qdot[2] << "," << Qdot[3] << "," << Qdot[4] << "," << Qdot[5] << ","
-                 << X[0] << "," << X[1] << "," << X[2] << ","
-                 << vel[0] << "," << vel[1] << "," << vel[2] << ","
-                 << FT[0] << "," << FT[1] << "," << FT[2] << "," << FT[3] << "," << FT[4] << "," << FT[5] << "\n";
+                 << Qdot_a[0] << "," << Qdot_a[1] << "," << Qdot_a[2] << "," << Qdot_a[3] << "," << Qdot_a[4] << "," << Qdot_a[5] << ","
+                 << FT[0] << "," << FT[1] << "," << FT[2] << "," << FT[3] << "," << FT[4] << "," << FT[5] << ","
+                 << vel[0] << "," << vel[1] << "," << vel[2] << "," << vel[3] << "," << vel[4] << "," << vel[5] << "\n";
 
-        // keep dt timing
-        elaps_loop = std::chrono::system_clock::now() - timeLoop;
-        float sleep_s = dt - elaps_loop.count();
-        if (sleep_s > 0) usleep((useconds_t)(sleep_s * 1e6));
+        sleep_to_keep_dt(t0);
     }
 
-    // 9) Shutdown
+    // Shutdown
     dataFile.close();
-    Start_record = false;
 
-    Myo_thread.interrupt();
+    stop_flag = true; // tell threads to exit
+
     FT_thread.interrupt();
     stop_thread.interrupt();
-    if (use_vrep) vrep_thread.interrupt();
+    vrep_thread.interrupt();
 
+    pb.shutdown_motors();
     pb.update();
-    cout << "Exiting...\n";
+
+    usleep(500 * 1000);
+    cout << "Exiting ...\n";
     return 0;
 }
