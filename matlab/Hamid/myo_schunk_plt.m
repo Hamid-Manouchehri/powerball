@@ -1,13 +1,20 @@
 clc; clear; close all;
 
-schunk_csv = "/home/hamid-tuf/projects/powerball/data/admittance/highDamp_damp_100_schunk.csv";
-myo_csv = "/home/hamid-tuf/projects/powerball/data/admittance/highDamp_myo.csv";
+addpath("/home/hamid-tuf/projects/powerball/matlab/Hamid/functions/");
+
+schunk_csv = "midDamp_damp_50_schunk.csv";  % TODO
+myo_csv = "midDamp_myo.csv";  % TODO
+
+dir = "/home/hamid-tuf/projects/powerball/data/admittance/";
+schunk_csv = dir + schunk_csv;
+myo_csv = dir + myo_csv;
 
 schunk_table = readtable(schunk_csv);
 schunk_time_s = (schunk_table.Time_us - schunk_table.Time_us(1)) / 1e6;
 myo_table = readtable(myo_csv);
 myo_time_s = (myo_table.Time_us - myo_table.Time_us(1)) / 1e6;
 
+t   = schunk_table{:,1}; 
 Q   = schunk_table{:,2:7}; 
 Qd  = schunk_table{:,8:13}; 
 FT  = schunk_table{:,14:19};
