@@ -1,11 +1,11 @@
 clc; clear; close all;
 
-addpath("/home/hamid-tuf/projects/powerball/matlab/Hamid/functions/");
+addpath("/home/hamid-tuf/projects/powerball/matlab/23_power_law/functions/");
 
 schunk_csv = "midDamp_damp_50_schunk.csv";  % TODO
 myo_csv = "midDamp_myo.csv";  % TODO
 
-dir = "/home/hamid-tuf/projects/powerball/data/admittance/";
+dir = "/home/hamid-tuf/projects/powerball/matlab/23_power_law/data/admittance/";
 schunk_csv = dir + schunk_csv;
 myo_csv = dir + myo_csv;
 
@@ -14,7 +14,6 @@ schunk_time_s = (schunk_table.Time_us - schunk_table.Time_us(1)) / 1e6;
 myo_table = readtable(myo_csv);
 myo_time_s = (myo_table.Time_us - myo_table.Time_us(1)) / 1e6;
 
-t   = schunk_table{:,1}; 
 Q   = schunk_table{:,2:7}; 
 Qd  = schunk_table{:,8:13}; 
 FT  = schunk_table{:,14:19};
@@ -72,16 +71,16 @@ subplot(4,1,4);
 plot(schunk_time_s, vel(:,1:3)); ylabel("tool vel (m/s)");
 legend(["Vx", "Vy", "Vz"]);
 
-ee_pos   = zeros(schunk_numOfDataSamples,3);
-ee_rot   = zeros(schunk_numOfDataSamples,3);
-ee_vel   = zeros(schunk_numOfDataSamples,6);
+ee_pos    = zeros(schunk_numOfDataSamples,3);
+ee_orient = zeros(schunk_numOfDataSamples,3);
+ee_vel    = zeros(schunk_numOfDataSamples,6);
 
 % Extracting cartesian space data from schunk:
 for i = 1:schunk_numOfDataSamples
     ee_vel(i, :) = Qd(i, :)*transpose(Jacob_schunk_fun(Q(i, :)));
     T = FK_schunk_fun(Q(i, :));
     T = T';
-    ee_rot(i, :) = rotm2eul(T(1:3,:), 'ZYX');  % [yaw pitch roll] in radians
+    ee_orient(i, :) = rotm2eul(T(1:3,:), 'ZYX');  % [yaw pitch roll] in radians
     ee_pos(i, :) = T(4, :);
 end
 
