@@ -2,12 +2,14 @@ clc; clear; close all;
 
 addpath("/home/hamid-tuf/projects/powerball/matlab/23_power_law/functions/");
 
+schunk_mat_file_save = "midDamp_50_schunk.mat";
 schunk_csv = "midDamp_damp_50_schunk.csv";  % TODO
 myo_csv = "midDamp_myo.csv";  % TODO
 
-dir = "/home/hamid-tuf/projects/powerball/matlab/23_power_law/data/admittance/";
-schunk_csv = dir + schunk_csv;
-myo_csv = dir + myo_csv;
+mat_dir = "/home/hamid-tuf/projects/powerball/matlab/23_power_law/data/mat/";
+csv_dir = "/home/hamid-tuf/projects/powerball/matlab/23_power_law/data/admittance/";
+schunk_csv = csv_dir + schunk_csv;
+myo_csv = csv_dir + myo_csv;
 
 schunk_table = readtable(schunk_csv);
 schunk_time_s = (schunk_table.Time_us - schunk_table.Time_us(1)) / 1e6;
@@ -62,6 +64,7 @@ alpha = 0.;  % TODO
 eps_v = 1e-6;
 eps_c = 1e-12;   % to avoid division by zero in curvature term
 
+% Calculating the radius of segment-wise curvature
 for i = 2:schunk_numOfDataSamples-1
     vNorm(i) = norm([xDot(i) yDot(i)]);
     denom = abs(xDot(i)*yDDot(i) - yDot(i)*xDDot(i));
@@ -84,6 +87,7 @@ beta_hat = NaN(num_windows, 1);
 K_hat = NaN(num_windows, 1);
 window_center_idx = NaN(num_windows, 1);
 
+% Fit a linear regression model: polyfit(x,y,1):
 j = 1;
 for i = 1:step:schunk_numOfDataSamples-windowSize+1
 
@@ -111,10 +115,10 @@ figure;
 plot(ee_pos(:, 2), ee_pos(:, 1), "r");
 xlabel("x (m)");
 ylabel("y (m)");
-title("admittance controlled.")
+title("admittance controlled maze path.")
 
 figure;
-plot(window_center_time, beta_hat, 'b.-');
+plot(window_center_time, beta_hat, 'r.-');
 grid on;
 xlabel('time [s]');
 ylabel('\beta');
@@ -130,21 +134,22 @@ title('Segment-wise affine velocity gain');
 figure;
 beta_error = abs(1/3 - beta_hat);
 % plot(window_center_time, beta_error, "o");
-histogram(beta_hat,-2:0.01:2,'Normalization','probability')
+histogram(beta_hat,-1:0.01:1,'Normalization','probability');
 grid on;
-xlabel('time [s]');
-ylabel('\beta error');
+% xlabel('time [s]');
+ylabel('\beta hat');
 title('Beta error');
 
 figure;
 plot(R, "o")
+title("Radius of curvature");
 
 figure;
 subplot(2,1,1)
 plot(schunk_time_s, ee_pos(:,1), 'o');
 ylabel("x");
 subplot(2,1,2)
-plot(schunk_time_s, ee_pos(:,2), 'b.');
+plot(schunk_time_s, ee_pos(:,2), 'r.');
 ylabel("y");
 % disp(["beta_hat =", num2str(beta_hat)])
 % disp(["k_hat =", num2str(K_hat)]);
@@ -153,3 +158,9 @@ ylabel("y");
 % figure; plot(log(k(valid)), log(omega(valid)), '.'); grid on;
 % xlabel("log(kappa)"); ylabel("log(omega)");
 % title("2/3 power law fit (slope = beta)");
+
+save((mat_dir+schunk_mat_file_save), 'schunk_time_s', 'x', 'y', ...
+                                     'window_center_time', 'beta_hat', ...
+                                     'K_hat', ...
+                                     'R');
+

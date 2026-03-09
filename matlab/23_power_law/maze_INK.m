@@ -141,8 +141,8 @@ tic
         end
 
         pts = points(1:pID,:);
-        filename = ['data_' num2str(sketchID) '.mat'];
-        save(filename,'pts');
+        filename = ['maze_INK_data_' num2str(sketchID) '.mat'];
+        save(['./data/' filename],'pts');
         fprintf('Saved to %s\n', filename);
     end
 

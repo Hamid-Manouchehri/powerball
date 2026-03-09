@@ -44,9 +44,9 @@ simxFloat newPos[3] = {0.0f, 0.439f, 0.275f};
 static const float dt = 0.005f;
 
 // Set to true to read and record Myo band (EMG/IMU) to a separate CSV; false to skip Myo.
-static const bool USE_MYO = true;  // TODO
+static const bool USE_MYO = false;  // TODO
 // Admittance parameters
-float Damp = 10.0f;  // TODO
+float Damp = 50.0f;  // TODO
 
 Vector<6,float> Q      = Zeros;
 Vector<6,float> Qe     = Zeros;
@@ -56,18 +56,17 @@ Vector<6,float> Qdot_a = Zeros;
 // Admittance time (seconds)
 float adm_time = 0.0f;
 
-// Oscillation parameters
-const float osc_start_time = 5.0f;
-const float osc_duration   = 10.0f;
-const float osc_omega      = 2.0f * M_PI * 0.5f; // 0.5 Hz
-const float osc_amplitude  = 0.01f;              // [m/s]
 
+float Fstd_pos = 2.0f;    // paper uses 2 or 3 N in examples
+float cmin_pos = 20.0f;
+float cmax_pos = 60.0f;
+float eps_v    = 1e-4f;
 
-Vector<6,float> Md_diag = makeVector(1,1,1,1,1,1) * 0.3f;
-Matrix<6,6,double> Md_inv = Md_diag.as_diagonal();
+Vector<6,float> Md_diag = makeVector(0.3f, 0.3f, 0.3f, 0.3f, 0.3f, 0.3f);
+Matrix<6,6,float> Md_inv = Zeros;
 
-Vector<6,float> Cd_diag = makeVector(1.2f,1.0f,1.0f,1.0f,1.0f,1.0f) * Damp;
-Matrix<6,6,double> Cd = Cd_diag.as_diagonal();
+Vector<6,float> Cd_diag = makeVector(cmax_pos, cmax_pos, cmax_pos, cmax_pos, cmax_pos, cmax_pos);
+Matrix<6,6,float> Cd = Cd_diag.as_diagonal();
 
 Vector<6,float> vel = Zeros;
 
@@ -168,7 +167,7 @@ void Myo_log(bool* stopFlag, std::string subject)
         }
     });
 
-    std::string myo_path = "/home/srisadha/powerball/data/Hamid/admittance/" + subject + "_myo.csv";
+    std::string myo_path = "/home/srisadha/powerball/src_main/Hamid/data/admittance/" + subject + "_myo.csv";
     std::ofstream myoFile(myo_path);
     myoFile << "Time_us,"
             << "EMG1,EMG2,EMG3,EMG4,EMG5,EMG6,EMG7,EMG8,"
@@ -192,6 +191,15 @@ void Myo_log(bool* stopFlag, std::string subject)
     myoFile.close();
 }
 
+
+static float clampf(float x, float lo, float hi)
+{
+    if (x < lo) return lo;
+    if (x > hi) return hi;
+    return x;
+}
+
+
 // Compute admittance -> Qdot
 void computations()
 {
@@ -202,65 +210,43 @@ void computations()
     Matrix<6,6,float> Rmat = Zeros;
     Vector<3,float> X = Zeros;
 
-    // Kinematics
     kin.Jacob(Q, &J);
     kin.FK_R(Q, &R);
     kin.FK_pos(Q, &X);
 
-    // update V-REP visualization
     newPos[0] = -X[1];
     newPos[1] =  X[0];
     newPos[2] =  X[2];
 
-    // build 6x6 rotation block matrix from R
     Rmat.slice<0,0,3,3>() = R;
     Rmat.slice<3,3,3,3>() = R;
 
-    // Use only planar forces derived from FT moments (your original logic)
+    // same force construction you already use
     Vector<6,float> F_modified = Zeros;
     F_modified[0] = -FT[3] * 10.0f;
     F_modified[1] = -FT[4] * 10.0f;
 
-    // Add oscillation along the applied planar force direction
-    if (adm_time >= osc_start_time && adm_time < (osc_start_time + osc_duration))
-    {
-        float t_rel = adm_time - osc_start_time;
-        float osc = osc_amplitude * sinf(osc_omega * t_rel);
+    Vector<6,float> F_cmd = Rmat * (R_F_offset * F_modified);
 
-        float fx = F_modified[0];
-        float fy = F_modified[1];
-        float n  = sqrtf(fx*fx + fy*fy);
+    // direct-intention variable damping from velocity
+    // paper applies it in position and orientation space;
+    // here start with position-space magnitude for simplicity
+    float v_pos = sqrtf(vel[0]*vel[0] + vel[1]*vel[1] + vel[2]*vel[2]);
+    float c_pos = clampf(Fstd_pos / std::max(v_pos, eps_v), cmin_pos, cmax_pos);
 
-        if (n > 1e-4f)
-        {
-            F_modified[0] += osc * fx / n;
-            F_modified[1] += osc * fy / n;
-        }
-    }
+    Cd_diag[0] = c_pos;
+    Cd_diag[1] = c_pos;
+    Cd_diag[2] = c_pos;
 
-    // Geometrical adaptation (your original)
-    float C1 = 0.075f, C2 = 0.125f;
-    float alpha = 1.0f;
-    float xx = 0.0f;
+    // keep orientation damping fixed for now, unless you also want rotational replication
+    Cd_diag[3] = cmax_pos;
+    Cd_diag[4] = cmax_pos;
+    Cd_diag[5] = cmax_pos;
 
-    if (X[1] <= C1)
-    {
-        alpha = 1.0f;
-    }
-    else if (X[1] < C2)
-    {
-        xx = (X[1] - C1) * 4.0f / (C2 - C1) - 2.0f;
-        alpha = tanh(xx) / 0.964f * 1.5f + 2.5f;
-    }
-    else
-    {
-        alpha = 3.5f;
-    }
+    Cd = Cd_diag.as_diagonal();
 
-    // Admittance: vel += dt * (M^-1 * (R*offset*F) - M^-1 * alpha*C*vel)
-    vel = vel + dt * (Md_inv * (Rmat * (R_F_offset * F_modified)) - Md_inv * (alpha * Cd) * vel);
+    vel = vel + dt * (Md_inv * (F_cmd - Cd * vel));
 
-    // Solve J * Qdot = vel using SVD pseudo-inverse
     SVD<6,6,float> svdJ(J);
     Qdot = svdJ.backsub(vel);
 }
@@ -305,6 +291,7 @@ void TCP_receive(bool* stopFlag)
     }
 }
 
+
 // -------------------- main --------------------
 int main(int argc, char** argv)
 {
@@ -318,6 +305,9 @@ int main(int argc, char** argv)
             break;
         }
     }
+
+    for (int i = 0; i < 6; i++)
+        Md_inv[i][i] = 1.0f / Md_diag[i];
 
     string SubName;
     cout << "What is subject name? ";
@@ -337,13 +327,14 @@ int main(int argc, char** argv)
     boost::thread vrep_thread(vrep_draw, &stop_flag);
 
     // Log file
-    std::string filepath = "/home/srisadha/powerball/data/Hamid/admittance/" + SubName + "_damp_" + std::to_string((int)Damp) + "_schunk.csv";
+    std::string filepath = "/home/srisadha/powerball/src_main/Hamid/data/admittance/" + SubName + "_damp_" + std::to_string((int)Damp) + "_schunk.csv";
     std::ofstream dataFile(filepath);
     dataFile << "Time_us,"
              << "Q1,Q2,Q3,Q4,Q5,Q6,"
              << "dQ1,dQ2,dQ3,dQ4,dQ5,dQ6,"
              << "FT1,FT2,FT3,FT4,FT5,FT6,"
-             << "Vx,Vy,Vz,omega_x,omega_y,omega_z\n";
+             << "Vx,Vy,Vz,omega_x,omega_y,omega_z,"
+             << "Cd1,Cd2,Cd3,Cd4,Cd5,Cd6\n";
 
     // Robot connect
     SchunkPowerball pb;
@@ -411,7 +402,8 @@ int main(int argc, char** argv)
                  << Q[0] << "," << Q[1] << "," << Q[2] << "," << Q[3] << "," << Q[4] << "," << Q[5] << ","
                  << Qdot_a[0] << "," << Qdot_a[1] << "," << Qdot_a[2] << "," << Qdot_a[3] << "," << Qdot_a[4] << "," << Qdot_a[5] << ","
                  << FT[0] << "," << FT[1] << "," << FT[2] << "," << FT[3] << "," << FT[4] << "," << FT[5] << ","
-                 << vel[0] << "," << vel[1] << "," << vel[2] << "," << vel[3] << "," << vel[4] << "," << vel[5] << "\n";
+                 << vel[0] << "," << vel[1] << "," << vel[2] << "," << vel[3] << "," << vel[4] << "," << vel[5] << ","
+                 << Cd_diag[0] << "," << Cd_diag[1] << "," << Cd_diag[2] << "," << Cd_diag[3] << "," << Cd_diag[4] << "," << Cd_diag[5] << "\n";
 
         sleep_to_keep_dt(t0);
     }
