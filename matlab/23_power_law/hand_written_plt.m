@@ -69,9 +69,10 @@ window_center_idx = NaN(num_windows, 1);
 window_start_idx = NaN(num_windows, 1);
 window_end_idx   = NaN(num_windows, 1);
 
-j = 1;
+j = 0;
 for i = 1:step:numSamples-windowSize+1
 
+    j = j + 1;
     idx1 = i;
     idx2 = i + windowSize - 1;
 
@@ -90,27 +91,76 @@ for i = 1:step:numSamples-windowSize+1
     end
 
     window_center_idx(j) = floor((idx1 + idx2) / 2);
-    j = j + 1;
 end
 
 window_center_time = t(window_center_idx);
+
+x_window = cell(num_windows,1);
+y_window = cell(num_windows,1);
+t_window = cell(num_windows,1);
 
 for i=1:num_windows
     idx1 = window_start_idx(i);
     idx2 = window_end_idx(i);
     
-    x_window = x(idx1:idx2);
-    y_window = y(idx1:idx2);
-    t_window = t(idx1:idx2);
+    x_window{i} = x(idx1:idx2);
+    y_window{i} = y(idx1:idx2);
+    t_window{i} = t(idx1:idx2);
 end
 
-% figure;
-% plot(x, y);
-% xlabel("x (m)");
-% ylabel("y (m)");
-% title("hand written maze path.");
+% Spatial calculation of entropy:
+x_gross_max = 0.8;   % TODO
+x_fine_min  = 0.86;  % TODO
+% transition zone: x_gross_max <= x <= x_fine_min
 
-% figure;
+% Compute mean X position of each window
+x_window_mean = NaN(num_windows, 1);
+for i = 1:num_windows
+    x_window_mean(i) = mean(x_window{i});
+end
+
+% Assign zone label per window based on x location: 1=Gross, 2=Transition, 3=Fine
+zone_label = zeros(num_windows, 1);
+for i = 1:num_windows
+    if x_window_mean(i) < x_gross_max
+        zone_label(i) = 1;          % Gross
+    elseif x_window_mean(i) > x_fine_min
+        zone_label(i) = 3;          % Fine
+    else
+        zone_label(i) = 2;          % Transition
+    end
+end
+
+entropy.zone_num  = NaN(3, 1);
+entropy.zone_name = ["gross", "transition", "fine"];
+
+for z = 1:3  % iterate through zone labels
+    idx_z = find(zone_label == z & ~isnan(K_hat));
+    K_z = K_hat(idx_z);
+
+    if numel(K_z) < 2
+        warning('Zone %s has too few windows for entropy.', entropy.zone_name{z});
+        continue
+    end
+
+    [pmf, edges] = histcounts(K_z/10, "Normalization","probability");
+    pmf = pmf(pmf > 0);  % remove zero bins (log(0) guard)
+    entropy.zone_num(z) = -sum(pmf .* log2(pmf));
+end
+
+
+
+
+
+% plotting
+% -------------------------------------------------------------------------
+figure;
+plot(x, y);
+xlabel("x (m)");
+ylabel("y (m)");
+title("hand written maze path.");
+
+figure;
 % subplot(1,3,k);
 beta_error = abs(1/3 - beta_hat);
 % plot(window_center_time, beta_error, "o");
@@ -121,9 +171,9 @@ ylabel('\beta');
 title('Beta error');
 
 save(hand_written_maze_file_dir + save_hand_written_maze_file, ...
-     't', 'x', 'y', ...
-     'window_start_idx', 'window_end_idx', 'window_center_idx', ...
-     'window_center_time', 'beta_hat', 'K_hat', 'R');
+     't', 'x', 'y', 'window_center_time', ...
+     'entropy', 'beta_hat', 'K_hat', 'R', ...
+     't_window', 'x_window', 'y_window');
 
 
 
