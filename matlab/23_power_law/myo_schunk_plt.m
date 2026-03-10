@@ -2,16 +2,16 @@ clc; clear; close all;
 
 addpath("/home/hamid-tuf/projects/powerball/matlab/23_power_law/functions/");
 
-schunk_csv = "maze_var_damp_schunk.csv";  % TODO
-myo_csv = "midDamp_myo.csv";  % TODO
+read_schunk_csv = "maze_var_damp_schunk.csv";  % TODO
+read_myo_csv = "midDamp_myo.csv";  % TODO
 
 dir = "/home/hamid-tuf/projects/powerball/matlab/23_power_law/data/admittance/";
-schunk_csv = dir + schunk_csv;
-myo_csv = dir + myo_csv;
+read_schunk_csv = dir + read_schunk_csv;
+read_myo_csv = dir + read_myo_csv;
 
-schunk_table = readtable(schunk_csv);
+schunk_table = readtable(read_schunk_csv);
 schunk_time_s = (schunk_table.Time_us - schunk_table.Time_us(1)) / 1e6;
-myo_table = readtable(myo_csv);
+myo_table = readtable(read_myo_csv);
 myo_time_s = (myo_table.Time_us - myo_table.Time_us(1)) / 1e6;
 
 Q   = schunk_table{:,2:7}; 
