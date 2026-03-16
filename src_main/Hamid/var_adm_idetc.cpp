@@ -58,8 +58,8 @@ float adm_time = 0.0f;
 
 
 float Fstd_pos = 2.0f;    // paper uses 2 or 3 N in examples
-float cmin_pos = 20.0f;
-float cmax_pos = 60.0f;
+float cmin_pos = 10.0f;
+float cmax_pos = 100.0f;
 float eps_v    = 1e-4f;
 
 Vector<6,float> Md_diag = makeVector(0.3f, 0.3f, 0.3f, 0.3f, 0.3f, 0.3f);
@@ -167,7 +167,7 @@ void Myo_log(bool* stopFlag, std::string subject)
         }
     });
 
-    std::string myo_path = "/home/srisadha/powerball/src_main/Hamid/data/admittance/" + subject + "_myo.csv";
+    std::string myo_path = "/home/srisadha/powerball/src_main/Hamid/data/admittance/" + subject + "_var_damp_myo.csv";
     std::ofstream myoFile(myo_path);
     myoFile << "Time_us,"
             << "EMG1,EMG2,EMG3,EMG4,EMG5,EMG6,EMG7,EMG8,"
@@ -223,8 +223,8 @@ void computations()
 
     // same force construction you already use
     Vector<6,float> F_modified = Zeros;
-    F_modified[0] = -FT[3] * 10.0f;
-    F_modified[1] = -FT[4] * 10.0f;
+    F_modified[0] = -FT[3] * 5.0f;
+    F_modified[1] = -FT[4] * 5.0f;
 
     Vector<6,float> F_cmd = Rmat * (R_F_offset * F_modified);
 
@@ -327,7 +327,7 @@ int main(int argc, char** argv)
     boost::thread vrep_thread(vrep_draw, &stop_flag);
 
     // Log file
-    std::string filepath = "/home/srisadha/powerball/src_main/Hamid/data/admittance/" + SubName + "_damp_" + std::to_string((int)Damp) + "_schunk.csv";
+    std::string filepath = "/home/srisadha/powerball/src_main/Hamid/data/admittance/" + SubName + "_var_damp_schunk.csv";
     std::ofstream dataFile(filepath);
     dataFile << "Time_us,"
              << "Q1,Q2,Q3,Q4,Q5,Q6,"

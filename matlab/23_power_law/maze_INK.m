@@ -1,7 +1,7 @@
 function maze_INK(bgFile)
 
 if nargin < 1
-    bgFile = './data/maze_img.png';
+    bgFile = './data/maze_img.png';  % background image
 end
 
 % -----------------------------
@@ -10,7 +10,7 @@ end
 points = zeros(50000,3);
 pID = 0;
 drawing = false;
-sketchID = 0;
+sketchID = 4;  % TODO; ID of recorded data
 
 % -----------------------------
 % Figure
@@ -141,7 +141,7 @@ tic
         end
 
         pts = points(1:pID,:);
-        filename = ['maze_INK_data_' num2str(sketchID) '.mat'];
+        filename = ['maze_INK_data_exp_' num2str(sketchID) '.mat'];
         save(['./data/' filename],'pts');
         fprintf('Saved to %s\n', filename);
     end

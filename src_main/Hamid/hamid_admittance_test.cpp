@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <unistd.h>
@@ -14,9 +15,14 @@
 #include <TooN/LU.h>
 #include <TooN/SVD.h>
 
+// Myo band headers
+#include "myolinux/myoclient.h"
+#include "myolinux/serial.h"
+
 using namespace::std;
 using boost::asio::ip::tcp;
 using namespace::TooN;
+using namespace myolinux;
 
 // global vars
 Vector<6,float> FT;
@@ -40,7 +46,10 @@ const float osc_omega      = 2.0f * M_PI * 0.5f; // angular frequency (0.5 Hz)
 const float osc_amplitude  = 0.01f;   // linear velocity amplitude [m/s]
 
 
-float Damp = 10;
+float Damp = 10;  // TODO
+
+// Set to true to read and record Myo band (EMG/IMU) to a separate CSV; false to skip Myo.
+static const bool USE_MYO = false;  // TODO
 
 // Cartesian admittance parameters_ one time define
 Vector<6,float> Md_diag = makeVector(1.0f,1.0f,1.0f,1.0f,1.0f,1.0f)*0.3f; // for constant m
@@ -63,6 +72,13 @@ Matrix<6,6,float> R_F_offset = Data(cos(M_PI/2),-sin(M_PI/2),0, 0,0,0,
                                     0,0,0, sin(M_PI/2),cos(M_PI/2),0,
                                     0,0,0,                      0,0,1);
 
+
+
+static long long now_us()
+{
+    using namespace std::chrono;
+    return duration_cast<microseconds>(system_clock::now().time_since_epoch()).count();
+}
 
 
 void stop(bool* flag){
@@ -95,6 +111,75 @@ int vrep_draw(){
         vrep.setSphere(&newPos[0]);
         usleep(40*1000);
     }
+}
+
+// -------------------- Myo logging (separate file) --------------------
+
+void Myo_log(bool* stopFlag, std::string subject)
+{
+    // Create local Myo client used only in this thread
+    myolinux::myo::Client client(myolinux::Serial{"/dev/ttyACM0", 115200});
+
+    client.connect();
+    if (!client.connected())
+    {
+        cout << "Unable to connect to Myo band" << endl;
+        return;
+    }
+
+    client.setSleepMode(myolinux::myo::SleepMode::NeverSleep);
+    client.setMode(myolinux::myo::EmgMode::SendEmg,
+                   myolinux::myo::ImuMode::SendData,
+                   myolinux::myo::ClassifierMode::Disabled);
+
+    int   emg[8]  = {0};
+    float ori[4]  = {0};
+    float acc[3]  = {0};
+    float gyr[3]  = {0};
+
+    client.onEmg([&](myolinux::myo::EmgSample sample)
+    {
+        for (int i = 0; i < 8; ++i)
+            emg[i] = sample[i];
+    });
+
+    client.onImu([&](myolinux::myo::OrientationSample o,
+                     myolinux::myo::AccelerometerSample a,
+                     myolinux::myo::GyroscopeSample g)
+    {
+        for (int i = 0; i < 4; ++i)
+        {
+            ori[i] = o[i];
+            if (i < 3)
+            {
+                acc[i] = a[i];
+                gyr[i] = g[i];
+            }
+        }
+    });
+
+    std::string myo_path = "../data/hamid/exp_1/" + subject + "_myo.csv";
+    std::ofstream myoFile(myo_path);
+    myoFile << "Time_us,"
+            << "EMG1,EMG2,EMG3,EMG4,EMG5,EMG6,EMG7,EMG8,"
+            << "ORI1,ORI2,ORI3,ORI4,"
+            << "ACC1,ACC2,ACC3,"
+            << "GYR1,GYR2,GYR3\n";
+
+    while (!(*stopFlag))
+    {
+        client.listen(); // blocks until a packet arrives and triggers callbacks
+
+        long long t = now_us();
+
+        myoFile << t;
+        for (int i = 0; i < 8; ++i) myoFile << "," << emg[i];
+        myoFile << "," << ori[0] << "," << ori[1] << "," << ori[2] << "," << ori[3]
+                << "," << acc[0] << "," << acc[1] << "," << acc[2]
+                << "," << gyr[0] << "," << gyr[1] << "," << gyr[2] << "\n";
+    }
+
+    myoFile.close();
 }
 
 void computations(){
@@ -210,6 +295,17 @@ void TCP_receive(bool *errFlag)
 
 int main(int argc, char** argv)
 {
+    // Myo: default from USE_MYO, override with -no-myo / --no-myo
+    bool use_myo = USE_MYO;
+    for (int i = 1; i < argc; i++)
+    {
+        if (strcmp(argv[i], "-no-myo") == 0 || strcmp(argv[i], "--no-myo") == 0)
+        {
+            use_myo = false;
+            break;
+        }
+    }
+
     string SubName;
     // subject information
     cout << "What is subject name? ";
@@ -246,6 +342,11 @@ int main(int argc, char** argv)
     // stop by Enter key thread
     bool stop_flag = false;
     boost::thread stop_thread(stop,&stop_flag);
+
+    // Myo logging thread (only if use_myo is true)
+    boost::thread myo_thread;
+    if (use_myo)
+        myo_thread = boost::thread(Myo_log, &stop_flag, SubName);
 
     // go to start pose
     Qe = Data(0.0f,-M_PI/6,M_PI/2,0.0f,M_PI/3,0.0f);
@@ -330,7 +431,13 @@ int main(int argc, char** argv)
 
 
     dataFile.close(); // close file
-    // kill FT thread
+
+    // tell background threads to exit
+    stop_flag = true;
+
+    // kill FT, Myo, and other threads
+    if (myo_thread.joinable())
+        myo_thread.interrupt();
     FT_thread.interrupt();
     stop_thread.interrupt();   // kill the thread
     vrep_thread.interrupt();

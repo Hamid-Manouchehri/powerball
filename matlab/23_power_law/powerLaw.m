@@ -2,12 +2,13 @@ clc; clear; close all;
 
 addpath("/home/hamid-tuf/projects/powerball/matlab/23_power_law/functions/");
 
-save_schunk_mat_file = "midDamp_50_schunk_mat.mat";  % TODO
-read_schunk_csv = "midDamp_damp_50_schunk.csv";  % TODO
-read_myo_csv = "midDamp_myo.csv";  % TODO
+save_schunk_mat_file = "test.mat";  % TODO
+% save_schunk_mat_file = "tahsin_exp5_damp_100_mat.mat";  % TODO
+read_schunk_csv = "data_tahsin/tahsin_exp5_schunk_damp_100.000000.csv";  % TODO
+read_myo_csv = "data_tahsin/tahsin_exp5_myo_damp_100.000000.csv";  % TODO
 
-mat_dir = "/home/hamid-tuf/projects/powerball/matlab/23_power_law/data/mat/";
-csv_dir = "/home/hamid-tuf/projects/powerball/matlab/23_power_law/data/admittance/";
+mat_dir = "/home/hamid-tuf/projects/powerball/matlab/23_power_law/data/admittance/IDETC26/mat/";
+csv_dir = "/home/hamid-tuf/projects/powerball/matlab/23_power_law/data/admittance/IDETC26/";
 read_schunk_csv = csv_dir + read_schunk_csv;
 read_myo_csv = csv_dir + read_myo_csv;
 
@@ -135,11 +136,14 @@ end
 % Spatial calculation of entropy:
 y_gross_max = 0.1;  % TODO
 y_fine_min  = 0.13;  % TODO
+x_threshold = 0.38;
 % transition zone: x_gross_max <= x <= x_fine_min
 
 % Compute mean X position of each window
+x_window_mean = NaN(num_windows, 1);
 y_window_mean = NaN(num_windows, 1);
 for i = 1:num_windows
+    x_window_mean(i) = mean(x_window{i});
     y_window_mean(i) = mean(y_window{i});
 end
 
@@ -150,15 +154,18 @@ for i = 1:num_windows
         zone_label(i) = 1;          % Gross
     elseif y_window_mean(i) > y_fine_min
         zone_label(i) = 3;          % Fine
+    elseif y_window_mean(i) < y_fine_min && ...
+        y_window_mean(i) > y_gross_max && x_window_mean(i) > x_threshold
+        zone_label(i) = 2;          % Transition: gross to fine
     else
-        zone_label(i) = 2;          % Transition
+        zone_label(i) = 4;          % Transition: fine to gross
     end
 end
 
-entropy.zone_num  = NaN(3, 1);
-entropy.zone_name = ["gross", "transition", "fine"];
+entropy.zone_num  = NaN(4, 1);
+entropy.zone_name = ["gross", "gross2fine", "fine", "fine2gross"];
 
-for z = 1:3  % iterate through zone labels
+for z = 1:4  % iterate through zone labels
     idx_z = find(zone_label == z & ~isnan(K_hat));
     K_z = K_hat(idx_z);
 
@@ -178,7 +185,7 @@ end
 % plotting
 % -------------------------------------------------------------------------
 figure;
-plot(ee_pos(:, 2), ee_pos(:, 1), "r");
+plot(ee_pos(:, 2), ee_pos(:, 1), "o");
 xlabel("y (m)");
 ylabel("x (m)");
 title("admittance controlled maze path.")
@@ -191,7 +198,8 @@ ylabel('\beta');
 title('Segment-wise power law exponent');
 
 figure;
-plot(window_center_time, K_hat, 'r.-');
+k_hat_flt= movmean(K_hat, 6);
+plot(window_center_time, k_hat_flt, 'r.');
 grid on;
 xlabel('time [s]');
 ylabel('K');
@@ -217,13 +225,6 @@ ylabel("x");
 subplot(2,1,2)
 plot(schunk_time_s, ee_pos(:,2), 'r.');
 ylabel("y");
-% disp(["beta_hat =", num2str(beta_hat)])
-% disp(["k_hat =", num2str(K_hat)]);
-% disp(["beta_error =", num2str(beta_error)]);
-
-% figure; plot(log(k(valid)), log(omega(valid)), '.'); grid on;
-% xlabel("log(kappa)"); ylabel("log(omega)");
-% title("2/3 power law fit (slope = beta)");
 
 save((mat_dir + save_schunk_mat_file), 'schunk_time_s', 'x', 'y', ...
                                        'window_center_time', ...
