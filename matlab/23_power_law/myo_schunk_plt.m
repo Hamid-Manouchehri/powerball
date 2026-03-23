@@ -17,7 +17,7 @@ myo_time_s = (myo_table.Time_us - myo_table.Time_us(1)) / 1e6;
 Q   = schunk_table{:,2:7}; 
 Qd  = schunk_table{:,8:13}; 
 FT  = schunk_table{:,14:19};
-vel = schunk_table{:,20:25};  % end-effector
+vel = schunk_table{:,20:25};  % admittance vel
 Cd  = schunk_table{:,26:31};
 schunk_numOfDataSamples = size(Q, 1);
 

@@ -1,16 +1,22 @@
-clear; clc; close all;
+function [p3, J3, F3] = Q1(theta1, theta2, d3, obj)
 
-read_schunk_file = ["lowDamp_10_schunk_mat.mat", ...
-                    "midDamp_50_schunk_mat.mat", ...
-                    "highDamp_100_schunk_mat.mat"];
+% Geometry (mm)
+L1 = 500;
+L2 = 500;
+d1 = 400;
 
-dir = "/home/hamid-tuf/projects/powerball/matlab/23_power_law/data/mat/";
+% End-effector position
+p3 = [L1*cos(theta1) + L2*cos(theta1 + theta2);
+      L1*sin(theta1) + L2*sin(theta1 + theta2);
+      d1 + d3];
 
-read_schunk_file = dir + read_schunk_file;
-fName = cell(3,1);
-% a = load(read_schunk_file(1));
-for i=1:3
-    fName{i} = load(read_schunk_file(i));
+% Attractive force
+zeta = 5e-2;
+F3 = -zeta * (p3 - obj);
+
+% Jacobian
+J3 = [ -L1*sin(theta1) - L2*sin(theta1+theta2),  -L2*sin(theta1+theta2), 0;
+        L1*cos(theta1) + L2*cos(theta1+theta2),   L2*cos(theta1+theta2), 0;
+        0,                                        0,                     1];
+
 end
-
-fName

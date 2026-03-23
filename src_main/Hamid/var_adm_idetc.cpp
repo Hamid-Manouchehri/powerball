@@ -45,22 +45,30 @@ static const float dt = 0.005f;
 
 // Set to true to read and record Myo band (EMG/IMU) to a separate CSV; false to skip Myo.
 static const bool USE_MYO = false;  // TODO
-// Admittance parameters
-float Damp = 50.0f;  // TODO
 
 Vector<6,float> Q      = Zeros;
 Vector<6,float> Qe     = Zeros;
 Vector<6,float> Qdot   = Zeros;
-Vector<6,float> Qdot_a = Zeros;
+Vector<6,float> Qdot_a = Zeros;  // Schunk jonit velocity
 
-// Admittance time (seconds)
+float ft_scale_x = 1.0f;
+float ft_scale_y = 1.0f;
+
+float ft_lpf_alpha   = 0.5f;   // smaller = smoother
+float ft_deadband    = 0.5f;    // N
+float eps_v_meas     = 0.0002f;   // avoid huge damping near zero speed
+float c_rate_max     = 100.0f;  // damping slew rate
+float lambda_dls     = 0.12f;   // damped least-squares IK
+float qdot_lpf_alpha = 0.20f;   // joint velocity smoothing
+float qdot_limit     = 32.5f * (float)M_PI / 180.0f;
+float Fx_filt = 0.0f;
+float Fy_filt = 0.0f;
 float adm_time = 0.0f;
-
-
-float Fstd_pos = 2.0f;    // paper uses 2 or 3 N in examples
-float cmin_pos = 10.0f;
+float Fstd_pos = 3.0f;    // paper uses 2 or 3 N in examples
+float cmin_pos = 20.0f;
 float cmax_pos = 100.0f;
-float eps_v    = 1e-4f;
+float c_pos_x_prev = cmax_pos;
+float c_pos_y_prev = cmax_pos;
 
 Vector<6,float> Md_diag = makeVector(0.3f, 0.3f, 0.3f, 0.3f, 0.3f, 0.3f);
 Matrix<6,6,float> Md_inv = Zeros;
@@ -69,6 +77,13 @@ Vector<6,float> Cd_diag = makeVector(cmax_pos, cmax_pos, cmax_pos, cmax_pos, cma
 Matrix<6,6,float> Cd = Cd_diag.as_diagonal();
 
 Vector<6,float> vel = Zeros;
+Vector<6,float> Qdot_prev = Zeros;
+
+static float deadbandf(float x, float db)
+{
+    if (fabs(x) < db) return 0.0f;
+    return x;
+}   
 
 // Fixed force-frame rotation offset
 Matrix<6,6,float> R_F_offset = Data(
@@ -167,7 +182,7 @@ void Myo_log(bool* stopFlag, std::string subject)
         }
     });
 
-    std::string myo_path = "/home/srisadha/powerball/src_main/Hamid/data/admittance/" + subject + "_var_damp_myo.csv";
+    std::string myo_path = "/home/srisadha/powerball/src_main/Hamid/data/admittance/" + subject + "var_damp_myo.csv";
     std::ofstream myoFile(myo_path);
     myoFile << "Time_us,"
             << "EMG1,EMG2,EMG3,EMG4,EMG5,EMG6,EMG7,EMG8,"
@@ -208,7 +223,17 @@ void computations()
     Matrix<6,6,float> J = Zeros;
     Matrix<3,3,float> R = Zeros;
     Matrix<6,6,float> Rmat = Zeros;
+    Matrix<6,6,float> I6 = Zeros;
+    Matrix<6,6,float> A = Zeros;
+
     Vector<3,float> X = Zeros;
+    Vector<6,float> F_modified = Zeros;
+    Vector<6,float> F_cmd = Zeros;
+    Vector<6,float> v_meas = Zeros;
+    Vector<6,float> Qdot_cmd = Zeros;
+
+    for (int i = 0; i < 6; i++)
+        I6[i][i] = 1.0f;
 
     kin.Jacob(Q, &J);
     kin.FK_R(Q, &R);
@@ -221,34 +246,86 @@ void computations()
     Rmat.slice<0,0,3,3>() = R;
     Rmat.slice<3,3,3,3>() = R;
 
-    // same force construction you already use
-    Vector<6,float> F_modified = Zeros;
-    F_modified[0] = -FT[3] * 5.0f;
-    F_modified[1] = -FT[4] * 5.0f;
+    // FT -> planar Cartesian force
+    float Fx_raw =  FT[1] * ft_scale_x;
+    float Fy_raw = -FT[0] * ft_scale_y;
 
-    Vector<6,float> F_cmd = Rmat * (R_F_offset * F_modified);
+    // low-pass
+    Fx_filt = (1.0f - ft_lpf_alpha) * Fx_filt + ft_lpf_alpha * Fx_raw;
+    Fy_filt = (1.0f - ft_lpf_alpha) * Fy_filt + ft_lpf_alpha * Fy_raw;
 
-    // direct-intention variable damping from velocity
-    // paper applies it in position and orientation space;
-    // here start with position-space magnitude for simplicity
-    float v_pos = sqrtf(vel[0]*vel[0] + vel[1]*vel[1] + vel[2]*vel[2]);
-    float c_pos = clampf(Fstd_pos / std::max(v_pos, eps_v), cmin_pos, cmax_pos);
+    // deadband
+    Fx_filt = deadbandf(Fx_filt, ft_deadband);
+    Fy_filt = deadbandf(Fy_filt, ft_deadband);
 
-    Cd_diag[0] = c_pos;
-    Cd_diag[1] = c_pos;
-    Cd_diag[2] = c_pos;
+    F_modified[0] = Fx_filt;
+    F_modified[1] = Fy_filt;
+    F_modified[2] = 0.0f;
+    F_modified[3] = 0.0f;
+    F_modified[4] = 0.0f;
+    F_modified[5] = 0.0f;
 
-    // keep orientation damping fixed for now, unless you also want rotational replication
+    F_cmd = Rmat * (R_F_offset * F_modified);
+
+    // use measured EE velocity for variable damping
+    v_meas = J * Qdot_a;
+    // float v_pos = sqrtf(v_meas[0]*v_meas[0] + v_meas[1]*v_meas[1]);
+    float v_pos_x = v_meas[0];
+    float v_pos_y = v_meas[1];
+
+    float c_des_x = clampf(Fstd_pos / std::max(v_pos_x, eps_v_meas), cmin_pos, cmax_pos);
+    float c_des_y = clampf(Fstd_pos / std::max(v_pos_y, eps_v_meas), cmin_pos, cmax_pos);
+
+    // damping slew-rate limit
+    float dc_max = c_rate_max * dt;
+    float dc_x = c_des_x - c_pos_x_prev;
+    if (dc_x >  dc_max) dc_x =  dc_max;
+    if (dc_x < -dc_max) dc_x = -dc_max;
+
+    float c_pos_x = c_pos_x_prev + dc_x;
+    c_pos_x_prev = c_pos_x;
+    
+    float dc_y = c_des_y - c_pos_y_prev;
+    if (dc_y >  dc_max) dc_y =  dc_max;
+    if (dc_y < -dc_max) dc_y = -dc_max;
+
+    float c_pos_y = c_pos_y_prev + dc_y;
+    c_pos_y_prev = c_pos_y;
+    
+
+    Cd_diag[0] = c_pos_x;
+    Cd_diag[1] = c_pos_y;
+    Cd_diag[2] = cmax_pos;
     Cd_diag[3] = cmax_pos;
     Cd_diag[4] = cmax_pos;
     Cd_diag[5] = cmax_pos;
 
     Cd = Cd_diag.as_diagonal();
 
+    // Cartesian admittance
     vel = vel + dt * (Md_inv * (F_cmd - Cd * vel));
 
-    SVD<6,6,float> svdJ(J);
-    Qdot = svdJ.backsub(vel);
+    // keep only planar motion
+    vel[2] = 0.0f;
+    vel[3] = 0.0f;
+    vel[4] = 0.0f;
+    vel[5] = 0.0f;
+
+    // damped least-squares IK: qdot = J^T (J J^T + lambda^2 I)^-1 vel
+    A = J * J.T() + I6 * (lambda_dls * lambda_dls);
+
+    SVD<6,6,float> svdA(A);
+    Vector<6,float> y = svdA.backsub(vel);
+    Qdot_cmd = J.T() * y;
+
+    // joint velocity smoothing
+    Qdot = (1.0f - qdot_lpf_alpha) * Qdot_prev + qdot_lpf_alpha * Qdot_cmd;
+    Qdot_prev = Qdot;
+
+    // saturation
+    float qn = norm_inf(Qdot);
+    if (qn > qdot_limit)
+        Qdot = Qdot * (qdot_limit / qn);
 }
 
 // TCP FT receive thread (stoppable)
@@ -393,8 +470,13 @@ int main(int argc, char** argv)
         computations();
 
         // Velocity saturation (same threshold you used)
-        if (TooN::norm_inf(Qdot) <= 32.5f * (float)M_PI / 180.0f)
-            pb.set_vel(Qdot);
+        float qlim = 32.5f * M_PI / 180.0f;
+        // if (TooN::norm_inf(Qdot) <= 32.5f * (float)M_PI / 180.0f)
+        //     pb.set_vel(Qdot);
+        // if (TooN::norm_inf(Qdot) > qlim){
+        //     Qdot *= qlim / norm_inf(Qdot);
+        // }
+        pb.set_vel(Qdot);
 
         // log
         long long t_us = now_us();
