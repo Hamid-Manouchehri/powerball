@@ -54,13 +54,17 @@ Vector<6,float> Qdot_a = Zeros;  // Schunk jonit velocity
 float ft_scale_x = 1.0f;
 float ft_scale_y = 1.0f;
 
-float ft_lpf_alpha   = 0.5f;   // smaller = smoother
+float ft_lpf_alpha   = 0.5f;   // smaller = smoother alpha=[0 1]
 float ft_deadband    = 0.5f;    // N
+
 float eps_v_meas     = 0.0002f;   // avoid huge damping near zero speed
 float c_rate_max     = 100.0f;  // damping slew rate
+
 float lambda_dls     = 0.12f;   // damped least-squares IK
+
 float qdot_lpf_alpha = 0.20f;   // joint velocity smoothing
-float qdot_limit     = 32.5f * (float)M_PI / 180.0f;
+float qdot_limit     = 32.5f * (float)M_PI / 180.0f;  //  deg/s -> rad/s
+
 float Fx_filt = 0.0f;
 float Fy_filt = 0.0f;
 float adm_time = 0.0f;
@@ -69,6 +73,12 @@ float cmin_pos = 20.0f;
 float cmax_pos = 100.0f;
 float c_pos_x_prev = cmax_pos;
 float c_pos_y_prev = cmax_pos;
+
+Vector<3,float> X = Zeros;
+Vector<6,float> F_modified = Zeros;
+Vector<6,float> F_cmd = Zeros;
+Vector<6,float> v_meas = Zeros;
+Vector<6,float> Qdot_cmd = Zeros;
 
 Vector<6,float> Md_diag = makeVector(0.3f, 0.3f, 0.3f, 0.3f, 0.3f, 0.3f);
 Matrix<6,6,float> Md_inv = Zeros;
@@ -226,12 +236,6 @@ void computations()
     Matrix<6,6,float> I6 = Zeros;
     Matrix<6,6,float> A = Zeros;
 
-    Vector<3,float> X = Zeros;
-    Vector<6,float> F_modified = Zeros;
-    Vector<6,float> F_cmd = Zeros;
-    Vector<6,float> v_meas = Zeros;
-    Vector<6,float> Qdot_cmd = Zeros;
-
     for (int i = 0; i < 6; i++)
         I6[i][i] = 1.0f;
 
@@ -250,7 +254,7 @@ void computations()
     float Fx_raw =  FT[1] * ft_scale_x;
     float Fy_raw = -FT[0] * ft_scale_y;
 
-    // low-pass
+    // low-pass filter (LPF)
     Fx_filt = (1.0f - ft_lpf_alpha) * Fx_filt + ft_lpf_alpha * Fx_raw;
     Fy_filt = (1.0f - ft_lpf_alpha) * Fy_filt + ft_lpf_alpha * Fy_raw;
 
@@ -265,18 +269,17 @@ void computations()
     F_modified[4] = 0.0f;
     F_modified[5] = 0.0f;
 
-    F_cmd = Rmat * (R_F_offset * F_modified);
+    F_cmd = Rmat * (R_F_offset * F_modified);  // Convert the force from sensor frame into robot base frame.
 
-    // use measured EE velocity for variable damping
+    // Variable damping per Cartesian axis from |v| on that axis (not shared planar speed).
+    // Law: larger |v_axis| -> smaller c_des_axis (softer along motion), tiny |v| -> cmax (stiff transverse).
     v_meas = J * Qdot_a;
-    // float v_pos = sqrtf(v_meas[0]*v_meas[0] + v_meas[1]*v_meas[1]);
     float v_pos_x = v_meas[0];
     float v_pos_y = v_meas[1];
+    float c_des_x = clampf(Fstd_pos / std::max(fabsf(v_pos_x), eps_v_meas), cmin_pos, cmax_pos);
+    float c_des_y = clampf(Fstd_pos / std::max(fabsf(v_pos_y), eps_v_meas), cmin_pos, cmax_pos);
 
-    float c_des_x = clampf(Fstd_pos / std::max(v_pos_x, eps_v_meas), cmin_pos, cmax_pos);
-    float c_des_y = clampf(Fstd_pos / std::max(v_pos_y, eps_v_meas), cmin_pos, cmax_pos);
-
-    // damping slew-rate limit
+    // damping slew-rate limit (rate limiter)
     float dc_max = c_rate_max * dt;
     float dc_x = c_des_x - c_pos_x_prev;
     if (dc_x >  dc_max) dc_x =  dc_max;
@@ -408,9 +411,12 @@ int main(int argc, char** argv)
     std::ofstream dataFile(filepath);
     dataFile << "Time_us,"
              << "Q1,Q2,Q3,Q4,Q5,Q6,"
-             << "dQ1,dQ2,dQ3,dQ4,dQ5,dQ6,"
+             << "Qdot_a1,Qdot_a2,Qdot_a3,Qdot_a4,Qdot_a5,Qdot_a6,"
+             << "Qdot1,Qdot2,Qdot3,Qdot4,Qdot5,Qdot6,"
              << "FT1,FT2,FT3,FT4,FT5,FT6,"
-             << "Vx,Vy,Vz,omega_x,omega_y,omega_z,"
+             << "F_cmd1,F_cmd2,F_cmd3,F_cmd4,F_cmd5,F_cmd6,"
+             << "v_meas1,v_meas2,v_meas3,v_meas4,v_meas5,v_meas6,"
+             << "vel1,vel2,vel3,vel4,vel5,vel6,"
              << "Cd1,Cd2,Cd3,Cd4,Cd5,Cd6\n";
 
     // Robot connect
@@ -483,7 +489,10 @@ int main(int argc, char** argv)
         dataFile << t_us << ","
                  << Q[0] << "," << Q[1] << "," << Q[2] << "," << Q[3] << "," << Q[4] << "," << Q[5] << ","
                  << Qdot_a[0] << "," << Qdot_a[1] << "," << Qdot_a[2] << "," << Qdot_a[3] << "," << Qdot_a[4] << "," << Qdot_a[5] << ","
+                 << Qdot[0] << "," << Qdot[1] << "," << Qdot[2] << "," << Qdot[3] << "," << Qdot[4] << "," << Qdot[5] << ","
                  << FT[0] << "," << FT[1] << "," << FT[2] << "," << FT[3] << "," << FT[4] << "," << FT[5] << ","
+                 << F_cmd[0] << "," << F_cmd[1] << "," << F_cmd[2] << "," << F_cmd[3] << "," << F_cmd[4] << "," << F_cmd[5] << ","
+                 << v_meas[0] << "," << v_meas[1] << "," << v_meas[2] << "," << v_meas[3] << "," << v_meas[4] << "," << v_meas[5] << ","
                  << vel[0] << "," << vel[1] << "," << vel[2] << "," << vel[3] << "," << vel[4] << "," << vel[5] << ","
                  << Cd_diag[0] << "," << Cd_diag[1] << "," << Cd_diag[2] << "," << Cd_diag[3] << "," << Cd_diag[4] << "," << Cd_diag[5] << "\n";
 
