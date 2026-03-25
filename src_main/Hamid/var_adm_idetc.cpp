@@ -58,7 +58,7 @@ float ft_lpf_alpha   = 0.5f;   // smaller = smoother alpha=[0 1]
 float ft_deadband    = 0.5f;    // N
 
 float eps_v_meas     = 0.0002f;   // avoid huge damping near zero speed
-float c_rate_max     = 100.0f;  // damping slew rate
+float c_rate_max     = 1.0f;  // damping slew rate
 
 float lambda_dls     = 0.12f;   // damped least-squares IK
 
@@ -69,8 +69,10 @@ float Fx_filt = 0.0f;
 float Fy_filt = 0.0f;
 float adm_time = 0.0f;
 float Fstd_pos = 3.0f;    // paper uses 2 or 3 N in examples
+
 float cmin_pos = 20.0f;
 float cmax_pos = 100.0f;
+
 float c_pos_x_prev = cmax_pos;
 float c_pos_y_prev = cmax_pos;
 

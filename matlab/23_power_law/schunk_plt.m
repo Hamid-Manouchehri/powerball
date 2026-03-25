@@ -2,7 +2,7 @@ clear; clc; close all;
 
 addpath("/home/hamid-tuf/projects/powerball/matlab/23_power_law/functions/")
 
-read_schunk_file = "test_2d_var_damp_schunk.csv";
+read_schunk_file = "test_2d_2_var_damp_schunk.csv";
 
 dir = "/home/hamid-tuf/projects/powerball/matlab/23_power_law/data/admittance/";
 
