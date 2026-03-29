@@ -18,6 +18,8 @@
 #include <boost/lexical_cast.hpp>
 
 #include <chrono>
+#include <atomic>
+#include <mutex>
 
 #include "powerball/schunk_powerball.h"
 #include "vrep/v_repClass.h"
@@ -45,6 +47,10 @@ static const float dt = 0.005f;
 
 // Set to true to read and record Myo band (EMG/IMU) to a separate CSV; false to skip Myo.
 static const bool USE_MYO = false;  // TODO
+static const bool CONSTANT_DAMP = true; // TODO true: const damping, false: variable damping
+float const_damp = 10;  // TODO
+float cmin_pos = 40.0f;  // TODO
+float cmax_pos = 100.0f;  // TODO
 
 Vector<6,float> Q      = Zeros;
 Vector<6,float> Qe     = Zeros;
@@ -58,20 +64,19 @@ float ft_lpf_alpha   = 0.5f;   // smaller = smoother alpha=[0 1]
 float ft_deadband    = 0.5f;    // N
 
 float eps_v_meas     = 0.0002f;   // avoid huge damping near zero speed
-float c_rate_max     = 1.0f;  // damping slew rate
+float c_rate_max     = 10.0f;  // damping slew rate
 
 float lambda_dls     = 0.12f;   // damped least-squares IK
 
-float qdot_lpf_alpha = 0.20f;   // joint velocity smoothing
-float qdot_limit     = 32.5f * (float)M_PI / 180.0f;  //  deg/s -> rad/s
+float qdot_lpf_alpha = 0.20f;   // joint velocity smoothing; smaller = smoother
+float qdot_limit     = 50.5f * (float)M_PI / 180.0f;  //  deg/s -> rad/s
 
-float Fx_filt = 0.0f;
-float Fy_filt = 0.0f;
+float Fstd_pos = 3.0f;    // TODO
+float Fx_filt  = 0.0f;
+float Fy_filt  = 0.0f;
 float adm_time = 0.0f;
-float Fstd_pos = 3.0f;    // paper uses 2 or 3 N in examples
 
-float cmin_pos = 20.0f;
-float cmax_pos = 100.0f;
+
 
 float c_pos_x_prev = cmax_pos;
 float c_pos_y_prev = cmax_pos;
@@ -81,6 +86,7 @@ Vector<6,float> F_modified = Zeros;
 Vector<6,float> F_cmd = Zeros;
 Vector<6,float> v_meas = Zeros;
 Vector<6,float> Qdot_cmd = Zeros;
+Vector<2,float> c_des = Zeros;
 
 Vector<6,float> Md_diag = makeVector(0.3f, 0.3f, 0.3f, 0.3f, 0.3f, 0.3f);
 Matrix<6,6,float> Md_inv = Zeros;
@@ -90,6 +96,7 @@ Matrix<6,6,float> Cd = Cd_diag.as_diagonal();
 
 Vector<6,float> vel = Zeros;
 Vector<6,float> Qdot_prev = Zeros;
+std::mutex ft_mutex;
 
 static float deadbandf(float x, float db)
 {
@@ -114,6 +121,48 @@ static long long now_us()
     return duration_cast<microseconds>(system_clock::now().time_since_epoch()).count();
 }
 
+static void write_run_hyperparams_json(
+    const std::string& json_path,
+    const std::string& subject,
+    const std::string& data_csv_path,
+    bool use_myo
+)
+{
+    std::ofstream f(json_path);
+    if (!f.is_open())
+    {
+        std::cerr << "WARN: unable to open hyperparams file: " << json_path << std::endl;
+        return;
+    }
+
+    // Keep it dependency-free: write JSON manually (numbers/bools/strings only).
+    f << "{\n";
+    f << "  \"subject\": " << "\"" << subject << "\",\n";
+    f << "  \"data_csv_path\": " << "\"" << data_csv_path << "\",\n";
+    f << "  \"use_myo\": " << (use_myo ? "true" : "false") << ",\n";
+    f << "  \"build\": {\n";
+    f << "    \"date\": " << "\"" << __DATE__ << "\",\n";
+    f << "    \"time\": " << "\"" << __TIME__ << "\"\n";
+    f << "  },\n";
+    f << "  \"hyperparams\": {\n";
+    f << "    \"dt\": " << dt << ",\n";
+    f << "    \"ft_scale_x\": " << ft_scale_x << ",\n";
+    f << "    \"ft_scale_y\": " << ft_scale_y << ",\n";
+    f << "    \"ft_lpf_alpha\": " << ft_lpf_alpha << ",\n";
+    f << "    \"ft_deadband\": " << ft_deadband << ",\n";
+    f << "    \"eps_v_meas\": " << eps_v_meas << ",\n";
+    f << "    \"c_rate_max\": " << c_rate_max << ",\n";
+    f << "    \"lambda_dls\": " << lambda_dls << ",\n";
+    f << "    \"qdot_lpf_alpha\": " << qdot_lpf_alpha << ",\n";
+    f << "    \"qdot_limit\": " << qdot_limit << ",\n";
+    f << "    \"Fstd_pos\": " << Fstd_pos << ",\n";
+    f << "    \"cmin_pos\": " << cmin_pos << ",\n";
+    f << "    \"cmax_pos\": " << cmax_pos << ",\n";
+    f << "    \"Md_diag\": [" << Md_diag[0] << "," << Md_diag[1] << "," << Md_diag[2] << "," << Md_diag[3] << "," << Md_diag[4] << "," << Md_diag[5] << "]\n";
+    f << "  }\n";
+    f << "}\n";
+}
+
 static void sleep_to_keep_dt(std::chrono::time_point<std::chrono::system_clock> t0)
 {
     using namespace std::chrono;
@@ -123,15 +172,15 @@ static void sleep_to_keep_dt(std::chrono::time_point<std::chrono::system_clock> 
 }
 
 // Stop thread: press Enter
-void stop(bool* stopFlag)
+void stop(std::atomic<bool>* stopFlag)
 {
     char in;
     cin.get(in);
-    *stopFlag = true;
+    stopFlag->store(true);
 }
 
 // V-REP thread (stoppable)
-int vrep_draw(bool* stopFlag)
+int vrep_draw(std::atomic<bool>* stopFlag)
 {
     V_rep vrep;
     int res = vrep.connect();
@@ -141,7 +190,7 @@ int vrep_draw(bool* stopFlag)
         return 0;
     }
 
-    while (!(*stopFlag))
+    while (!stopFlag->load())
     {
         vrep.setSphere(&newPos[0]);
         usleep(40 * 1000);
@@ -151,7 +200,7 @@ int vrep_draw(bool* stopFlag)
 
 // -------------------- Myo logging (separate file) --------------------
 
-void Myo_log(bool* stopFlag, std::string subject)
+void Myo_log(std::atomic<bool>* stopFlag, std::string subject)
 {
     // Create local Myo client used only in this thread
     myolinux::myo::Client client(myolinux::Serial{"/dev/ttyACM0", 115200});
@@ -194,7 +243,7 @@ void Myo_log(bool* stopFlag, std::string subject)
         }
     });
 
-    std::string myo_path = "/home/srisadha/powerball/src_main/Hamid/data/admittance/" + subject + "var_damp_myo.csv";
+    std::string myo_path = "/home/srisadha/powerball/src_main/Hamid/data/admittance/" + subject + "myo.csv";
     std::ofstream myoFile(myo_path);
     myoFile << "Time_us,"
             << "EMG1,EMG2,EMG3,EMG4,EMG5,EMG6,EMG7,EMG8,"
@@ -202,7 +251,7 @@ void Myo_log(bool* stopFlag, std::string subject)
             << "ACC1,ACC2,ACC3,"
             << "GYR1,GYR2,GYR3\n";
 
-    while (!(*stopFlag))
+    while (!stopFlag->load())
     {
         client.listen(); // blocks until a packet arrives and triggers callbacks
 
@@ -252,9 +301,14 @@ void computations()
     Rmat.slice<0,0,3,3>() = R;
     Rmat.slice<3,3,3,3>() = R;
 
-    // FT -> planar Cartesian force
-    float Fx_raw =  FT[1] * ft_scale_x;
-    float Fy_raw = -FT[0] * ft_scale_y;
+    // FT -> planar Cartesian force (thread-safe snapshot)
+    Vector<6,float> FT_local = Zeros;
+    {
+        std::lock_guard<std::mutex> lock(ft_mutex);
+        FT_local = FT;
+    }
+    float Fx_raw =  FT_local[1] * ft_scale_x;
+    float Fy_raw = -FT_local[0] * ft_scale_y;
 
     // low-pass filter (LPF)
     Fx_filt = (1.0f - ft_lpf_alpha) * Fx_filt + ft_lpf_alpha * Fx_raw;
@@ -278,37 +332,57 @@ void computations()
     v_meas = J * Qdot_a;
     float v_pos_x = v_meas[0];
     float v_pos_y = v_meas[1];
-    float c_des_x = clampf(Fstd_pos / std::max(fabsf(v_pos_x), eps_v_meas), cmin_pos, cmax_pos);
-    float c_des_y = clampf(Fstd_pos / std::max(fabsf(v_pos_y), eps_v_meas), cmin_pos, cmax_pos);
-
+    
+    c_des[0] = clampf(Fstd_pos / std::max(fabsf(vel[0]), eps_v_meas), cmin_pos, cmax_pos);
+    c_des[1] = clampf(Fstd_pos / std::max(fabsf(vel[1]), eps_v_meas), cmin_pos, cmax_pos);
+    
     // damping slew-rate limit (rate limiter)
     float dc_max = c_rate_max * dt;
-    float dc_x = c_des_x - c_pos_x_prev;
+    
+    float dc_x = c_des[0] - c_pos_x_prev;  // diff(c)
     if (dc_x >  dc_max) dc_x =  dc_max;
     if (dc_x < -dc_max) dc_x = -dc_max;
-
     float c_pos_x = c_pos_x_prev + dc_x;
     c_pos_x_prev = c_pos_x;
     
-    float dc_y = c_des_y - c_pos_y_prev;
+    float dc_y = c_des[1] - c_pos_y_prev;
     if (dc_y >  dc_max) dc_y =  dc_max;
     if (dc_y < -dc_max) dc_y = -dc_max;
-
     float c_pos_y = c_pos_y_prev + dc_y;
     c_pos_y_prev = c_pos_y;
     
-
-    Cd_diag[0] = c_pos_x;
-    Cd_diag[1] = c_pos_y;
-    Cd_diag[2] = cmax_pos;
-    Cd_diag[3] = cmax_pos;
-    Cd_diag[4] = cmax_pos;
-    Cd_diag[5] = cmax_pos;
-
+    if (CONSTANT_DAMP == true){
+        Cd_diag = makeVector(1.0f,1.0f,1.0f,1.0f,1.0f,1.0f)*const_damp;
+    }
+    else{
+        // Cd_diag[0] = c_pos_x;
+        // Cd_diag[1] = c_pos_y;
+        Cd_diag[0] = c_des[0];
+        Cd_diag[1] = c_des[1];
+        Cd_diag[2] = cmax_pos;
+        Cd_diag[3] = cmax_pos;
+        Cd_diag[4] = cmax_pos;
+        Cd_diag[5] = cmax_pos;
+    }
     Cd = Cd_diag.as_diagonal();
+    
+    // Eq. (4)/(6)-consistent update: integrate once per cycle.
+    float x_ddot = (F_cmd[0] - Cd_diag[0] * vel[0]) / Md_diag[0];
+    float y_ddot = (F_cmd[1] - Cd_diag[1] * vel[1]) / Md_diag[1];
+    vel[0] = vel[0] + dt * x_ddot;
+    vel[1] = vel[1] + dt * y_ddot;
 
-    // Cartesian admittance
-    vel = vel + dt * (Md_inv * (F_cmd - Cd * vel));
+    // max velocity
+    float x_dot_max = fabs(F_cmd[0]) / std::max(Cd_diag[0],1e-6f);
+    float y_dot_max = fabs(F_cmd[1]) / std::max(Cd_diag[1],1e-6f);
+    
+    // restore signs:
+    if(F_cmd[0] < 0.0f) x_dot_max = -x_dot_max;
+    if(F_cmd[1] < 0.0f) y_dot_max = -y_dot_max;
+
+    if(fabs(vel[0]) > fabs(x_dot_max))  vel[0] = x_dot_max;
+    if(fabs(vel[1]) > fabs(y_dot_max))  vel[1] = y_dot_max;
+
 
     // keep only planar motion
     vel[2] = 0.0f;
@@ -334,7 +408,7 @@ void computations()
 }
 
 // TCP FT receive thread (stoppable)
-void TCP_receive(bool* stopFlag)
+void TCP_receive(std::atomic<bool>* stopFlag)
 {
     boost::asio::io_service io_service;
     tcp::endpoint sender_endpoint(
@@ -344,6 +418,7 @@ void TCP_receive(bool* stopFlag)
 
     tcp::socket socket(io_service);
     socket.connect(sender_endpoint);
+    socket.non_blocking(true);
 
     boost::system::error_code ignored_error;
     char recv_buf[128];
@@ -362,14 +437,28 @@ void TCP_receive(bool* stopFlag)
         socket.read_some(boost::asio::buffer(recv_buf), ignored_error);
     }
 
-    while (!(*stopFlag))
+    while (!stopFlag->load())
     {
         int len = socket.read_some(boost::asio::buffer(recv_buf), ignored_error);
-        if (len <= 0) continue;
+        if (ignored_error == boost::asio::error::would_block ||
+            ignored_error == boost::asio::error::try_again)
+        {
+            usleep(1000);
+            continue;
+        }
+        if (ignored_error || len <= 0) continue;
+        if (len >= (int)sizeof(recv_buf)) len = (int)sizeof(recv_buf) - 1;
+        recv_buf[len] = '\0';
 
         int timeStamp = 0;
-        sscanf(recv_buf, "F={%f,%f,%f,%f,%f,%f},%d",
-               &FT[0], &FT[1], &FT[2], &FT[3], &FT[4], &FT[5], &timeStamp);
+        Vector<6,float> FT_tmp = Zeros;
+        int matched = sscanf(recv_buf, "F={%f,%f,%f,%f,%f,%f},%d",
+                             &FT_tmp[0], &FT_tmp[1], &FT_tmp[2], &FT_tmp[3], &FT_tmp[4], &FT_tmp[5], &timeStamp);
+        if (matched == 7)
+        {
+            std::lock_guard<std::mutex> lock(ft_mutex);
+            FT = FT_tmp;
+        }
     }
 }
 
@@ -398,7 +487,7 @@ int main(int argc, char** argv)
     cin.get(); // consume newline
 
     // Threads stop flag
-    bool stop_flag = false;
+    std::atomic<bool> stop_flag(false);
 
     // Myo logging thread (only if use_myo is true)
     boost::thread myo_thread;
@@ -409,7 +498,7 @@ int main(int argc, char** argv)
     boost::thread vrep_thread(vrep_draw, &stop_flag);
 
     // Log file
-    std::string filepath = "/home/srisadha/powerball/src_main/Hamid/data/admittance/" + SubName + "_var_damp_schunk.csv";
+    std::string filepath = "/home/srisadha/powerball/src_main/Hamid/data/admittance/" + SubName + "_schunk.csv";
     std::ofstream dataFile(filepath);
     dataFile << "Time_us,"
              << "Q1,Q2,Q3,Q4,Q5,Q6,"
@@ -419,7 +508,14 @@ int main(int argc, char** argv)
              << "F_cmd1,F_cmd2,F_cmd3,F_cmd4,F_cmd5,F_cmd6,"
              << "v_meas1,v_meas2,v_meas3,v_meas4,v_meas5,v_meas6,"
              << "vel1,vel2,vel3,vel4,vel5,vel6,"
+             << "c_des1,c_des2,"
              << "Cd1,Cd2,Cd3,Cd4,Cd5,Cd6\n";
+
+    // Hyperparameters / run metadata sidecar (written once per run)
+    {
+        std::string jsonpath = "/home/srisadha/powerball/src_main/Hamid/data/admittance/json/" + SubName + "_schunk.hyperparams.json";
+        write_run_hyperparams_json(jsonpath, SubName, filepath, use_myo);
+    }
 
     // Robot connect
     SchunkPowerball pb;
@@ -431,6 +527,7 @@ int main(int argc, char** argv)
 
     // Go to start pose (simple cosine blend)
     Qe = Data(0.0f, -M_PI/6, M_PI/2, 0.0f, M_PI/3, 0.0f);
+    // Qe = Data(M_PI/6, -M_PI/6, M_PI/2, 0.0f, M_PI/3, 0.0f);
     Vector<6,float> dQ = Qe - Q;
 
     float maxq = 0.0f;
@@ -440,7 +537,7 @@ int main(int argc, char** argv)
     int itNum = (int)(Ttravel / dt);
 
     Vector<6,float> Qhold = Q;
-    for (int k = 1; k <= itNum && !stop_flag; k++)
+    for (int k = 1; k <= itNum && !stop_flag.load(); k++)
     {
         float s = (1.0f - cos((float)k / (float)itNum * (float)M_PI)) * 0.5f;
         Vector<6,float> Qt = s * dQ + Qhold;
@@ -463,12 +560,12 @@ int main(int argc, char** argv)
     // Run for 90 seconds max (same behavior as your old cnt<90/dt)
     const int max_steps = (int)(90.0f / dt);
 
-    for (int cnt = 0; cnt < max_steps && !stop_flag; cnt++)
+    for (int cnt = 0; cnt < max_steps && !stop_flag.load(); cnt++)
     {
         auto t0 = std::chrono::system_clock::now();
 
         adm_time = cnt * dt;
-
+        
         // Update robot state first
         pb.update();
         Q = pb.get_pos();
@@ -477,25 +574,24 @@ int main(int argc, char** argv)
         // Compute Qdot (NO thread creation here)
         computations();
 
-        // Velocity saturation (same threshold you used)
-        float qlim = 32.5f * M_PI / 180.0f;
-        // if (TooN::norm_inf(Qdot) <= 32.5f * (float)M_PI / 180.0f)
-        //     pb.set_vel(Qdot);
-        // if (TooN::norm_inf(Qdot) > qlim){
-        //     Qdot *= qlim / norm_inf(Qdot);
-        // }
         pb.set_vel(Qdot);
 
         // log
         long long t_us = now_us();
+        Vector<6,float> FT_log = Zeros;
+        {
+            std::lock_guard<std::mutex> lock(ft_mutex);
+            FT_log = FT;
+        }
         dataFile << t_us << ","
                  << Q[0] << "," << Q[1] << "," << Q[2] << "," << Q[3] << "," << Q[4] << "," << Q[5] << ","
                  << Qdot_a[0] << "," << Qdot_a[1] << "," << Qdot_a[2] << "," << Qdot_a[3] << "," << Qdot_a[4] << "," << Qdot_a[5] << ","
                  << Qdot[0] << "," << Qdot[1] << "," << Qdot[2] << "," << Qdot[3] << "," << Qdot[4] << "," << Qdot[5] << ","
-                 << FT[0] << "," << FT[1] << "," << FT[2] << "," << FT[3] << "," << FT[4] << "," << FT[5] << ","
+                 << FT_log[0] << "," << FT_log[1] << "," << FT_log[2] << "," << FT_log[3] << "," << FT_log[4] << "," << FT_log[5] << ","
                  << F_cmd[0] << "," << F_cmd[1] << "," << F_cmd[2] << "," << F_cmd[3] << "," << F_cmd[4] << "," << F_cmd[5] << ","
                  << v_meas[0] << "," << v_meas[1] << "," << v_meas[2] << "," << v_meas[3] << "," << v_meas[4] << "," << v_meas[5] << ","
                  << vel[0] << "," << vel[1] << "," << vel[2] << "," << vel[3] << "," << vel[4] << "," << vel[5] << ","
+                 << c_des[0] << "," << c_des[1] << ","
                  << Cd_diag[0] << "," << Cd_diag[1] << "," << Cd_diag[2] << "," << Cd_diag[3] << "," << Cd_diag[4] << "," << Cd_diag[5] << "\n";
 
         sleep_to_keep_dt(t0);
@@ -504,13 +600,16 @@ int main(int argc, char** argv)
     // Shutdown
     dataFile.close();
 
-    stop_flag = true; // tell threads to exit
+    stop_flag.store(true); // tell threads to exit
 
     if (myo_thread.joinable())
-        myo_thread.interrupt();
-    FT_thread.interrupt();
-    stop_thread.interrupt();
-    vrep_thread.interrupt();
+        myo_thread.join();
+    if (FT_thread.joinable())
+        FT_thread.join();
+    if (vrep_thread.joinable())
+        vrep_thread.join();
+    if (stop_thread.joinable())
+        stop_thread.detach();
 
     pb.shutdown_motors();
     pb.update();

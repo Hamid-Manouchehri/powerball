@@ -2,8 +2,8 @@ clc; clear; close all;
 
 addpath("/home/hamid-tuf/projects/powerball/matlab/23_power_law/functions/");
 
-read_schunk_csv = "maze_var_damp_schunk.csv";  % TODO
-read_myo_csv = "midDamp_myo.csv";  % TODO
+read_schunk_csv = "low_damp_schunk_damp_10.000000.csv";  % TODO
+read_myo_csv = "low_damp_myo_damp_10.000000.csv";  % TODO
 
 dir = "/home/hamid-tuf/projects/powerball/matlab/23_power_law/data/admittance/";
 read_schunk_csv = dir + read_schunk_csv;
