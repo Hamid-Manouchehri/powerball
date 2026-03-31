@@ -44,42 +44,47 @@ simxFloat newPos[3] = {0.0f, 0.439f, 0.275f};
 
 // Control loop
 static const float dt = 0.005f;
+static const float z_ref = 0.11563f;
 
 // Set to true to read and record Myo band (EMG/IMU) to a separate CSV; false to skip Myo.
 static const bool USE_MYO = false;  // TODO
-static const bool CONSTANT_DAMP = true; // TODO true: const damping, false: variable damping
-float const_damp = 10;  // TODO
-float cmin_pos = 40.0f;  // TODO
-float cmax_pos = 100.0f;  // TODO
-
-Vector<6,float> Q      = Zeros;
-Vector<6,float> Qe     = Zeros;
-Vector<6,float> Qdot   = Zeros;
-Vector<6,float> Qdot_a = Zeros;  // Schunk jonit velocity
+static const bool CONSTANT_DAMP = false; // TODO true: const damping, false: variable damping
+float const_damp = 100;  // TODO
+float cmin_pos = 20.0f;  // TODO
+float cmax_pos = 100.0f; // TODO
+float M_inertia = 8.0f;  // TODO
 
 float ft_scale_x = 1.0f;
 float ft_scale_y = 1.0f;
 
 float ft_lpf_alpha   = 0.5f;   // smaller = smoother alpha=[0 1]
-float ft_deadband    = 0.5f;    // N
+float ft_deadband    = 0.05f;   // N
 
-float eps_v_meas     = 0.0002f;   // avoid huge damping near zero speed
-float c_rate_max     = 10.0f;  // damping slew rate
+float eps_v_meas     = 0.02f;   // TODO; avoid huge damping near zero speed
+float c_rate_max     = 100.0f;   // TODO; damping slew rate
+float dc_max = c_rate_max * dt;  // damping slew-rate limit (rate limiter)
 
 float lambda_dls     = 0.12f;   // damped least-squares IK
 
 float qdot_lpf_alpha = 0.20f;   // joint velocity smoothing; smaller = smoother
-float qdot_limit     = 50.5f * (float)M_PI / 180.0f;  //  deg/s -> rad/s
+float qdot_limit     = 30.0f * (float)M_PI / 180.0f;  //  deg/s -> rad/s
 
 float Fstd_pos = 3.0f;    // TODO
 float Fx_filt  = 0.0f;
 float Fy_filt  = 0.0f;
 float adm_time = 0.0f;
 
-
-
 float c_pos_x_prev = cmax_pos;
 float c_pos_y_prev = cmax_pos;
+
+Vector<6,float> Q      = Zeros;
+Vector<6,float> Qe     = Zeros;
+Vector<6,float> Qdot   = Zeros;
+Vector<6,float> Qdot_a = Zeros;  // Schunk jonit velocity
+
+Vector<6,float> v_meas_lpf = Zeros;
+Vector<6,float> v_meas_lpf_prev = Zeros;
+float v_meas_lpf_alpha = 0.2f;
 
 Vector<3,float> X = Zeros;
 Vector<6,float> F_modified = Zeros;
@@ -88,10 +93,11 @@ Vector<6,float> v_meas = Zeros;
 Vector<6,float> Qdot_cmd = Zeros;
 Vector<2,float> c_des = Zeros;
 
-Vector<6,float> Md_diag = makeVector(0.3f, 0.3f, 0.3f, 0.3f, 0.3f, 0.3f);
+// Vector<6,float> Md_diag = makeVector(0.3f, 0.3f, 0.3f, 0.3f, 0.3f, 0.3f);  // virtual inertia vector
+Vector<6,float> Md_diag = Ones * M_inertia;  // virtual inertia vector
 Matrix<6,6,float> Md_inv = Zeros;
 
-Vector<6,float> Cd_diag = makeVector(cmax_pos, cmax_pos, cmax_pos, cmax_pos, cmax_pos, cmax_pos);
+Vector<6,float> Cd_diag = makeVector(cmax_pos, cmax_pos, cmax_pos, cmax_pos, cmax_pos, cmax_pos);  // virtual damping vector
 Matrix<6,6,float> Cd = Cd_diag.as_diagonal();
 
 Vector<6,float> vel = Zeros;
@@ -120,6 +126,31 @@ static long long now_us()
     using namespace std::chrono;
     return duration_cast<microseconds>(system_clock::now().time_since_epoch()).count();
 }
+
+struct velHysteresis{
+    float v_enter;
+    float v_exit;
+    bool moving;
+    
+    velHysteresis(float enter_th, float exit_th): v_enter(enter_th), v_exit(exit_th), moving(false){}
+    
+    float apply(float v){
+        float av = fabsf(v);
+        if(!moving){
+            if (av > v_enter)
+                moving = true;
+        }
+        else{
+            if(av < v_exit)
+                moving = false;
+        }
+        
+        return moving ? v : 0.0f;
+    }
+};
+
+velHysteresis hyst_x(0.02f, 0.01f);
+velHysteresis hyst_y(0.02f, 0.01f);
 
 static void write_run_hyperparams_json(
     const std::string& json_path,
@@ -243,7 +274,7 @@ void Myo_log(std::atomic<bool>* stopFlag, std::string subject)
         }
     });
 
-    std::string myo_path = "/home/srisadha/powerball/src_main/Hamid/data/admittance/" + subject + "myo.csv";
+    std::string myo_path = "/home/srisadha/hamid_powerball/src_main/data/admittance/" + subject + "myo.csv";
     std::ofstream myoFile(myo_path);
     myoFile << "Time_us,"
             << "EMG1,EMG2,EMG3,EMG4,EMG5,EMG6,EMG7,EMG8,"
@@ -293,6 +324,11 @@ void computations()
     kin.Jacob(Q, &J);
     kin.FK_R(Q, &R);
     kin.FK_pos(Q, &X);
+    
+    // cout << "FK_R:" << "\n" << R << "\n";
+    // cout << "Q: " << Q << "\n";
+    // cout << "FK_pos: " << X << "\n\n\n";
+    // cout << "vel[0,1]: " << vel[0] << vel[1] << "\n";
 
     newPos[0] = -X[1];
     newPos[1] =  X[0];
@@ -313,6 +349,8 @@ void computations()
     // low-pass filter (LPF)
     Fx_filt = (1.0f - ft_lpf_alpha) * Fx_filt + ft_lpf_alpha * Fx_raw;
     Fy_filt = (1.0f - ft_lpf_alpha) * Fy_filt + ft_lpf_alpha * Fy_raw;
+    
+    // cout << "Fx_filtered: " << Fx_filt << "\n";
 
     // deadband
     Fx_filt = deadbandf(Fx_filt, ft_deadband);
@@ -330,14 +368,18 @@ void computations()
     // Variable damping per Cartesian axis from |v| on that axis (not shared planar speed).
     // Law: larger |v_axis| -> smaller c_des_axis (softer along motion), tiny |v| -> cmax (stiff transverse).
     v_meas = J * Qdot_a;
-    float v_pos_x = v_meas[0];
-    float v_pos_y = v_meas[1];
+    
+    v_meas_lpf = (1.0f - v_meas_lpf_alpha) * v_meas_lpf_prev + v_meas_lpf_alpha * v_meas;
+    v_meas_lpf_prev = v_meas_lpf;
+
+    // c_des[0] = clampf(Fstd_pos / std::max(fabsf(v_meas_lpf[0]), eps_v_meas), cmin_pos, cmax_pos);
+    // c_des[1] = clampf(Fstd_pos / std::max(fabsf(v_meas_lpf[1]), eps_v_meas), cmin_pos, cmax_pos);
+    
+    // vel[0] = hyst_x.apply(vel[0]);
+    // vel[1] = hyst_x.apply(vel[1]);
     
     c_des[0] = clampf(Fstd_pos / std::max(fabsf(vel[0]), eps_v_meas), cmin_pos, cmax_pos);
     c_des[1] = clampf(Fstd_pos / std::max(fabsf(vel[1]), eps_v_meas), cmin_pos, cmax_pos);
-    
-    // damping slew-rate limit (rate limiter)
-    float dc_max = c_rate_max * dt;
     
     float dc_x = c_des[0] - c_pos_x_prev;  // diff(c)
     if (dc_x >  dc_max) dc_x =  dc_max;
@@ -355,10 +397,10 @@ void computations()
         Cd_diag = makeVector(1.0f,1.0f,1.0f,1.0f,1.0f,1.0f)*const_damp;
     }
     else{
-        // Cd_diag[0] = c_pos_x;
-        // Cd_diag[1] = c_pos_y;
-        Cd_diag[0] = c_des[0];
-        Cd_diag[1] = c_des[1];
+        Cd_diag[0] = c_pos_x;
+        Cd_diag[1] = c_pos_y;
+        // Cd_diag[0] = c_des[0];
+        // Cd_diag[1] = c_des[1];
         Cd_diag[2] = cmax_pos;
         Cd_diag[3] = cmax_pos;
         Cd_diag[4] = cmax_pos;
@@ -382,9 +424,7 @@ void computations()
 
     if(fabs(vel[0]) > fabs(x_dot_max))  vel[0] = x_dot_max;
     if(fabs(vel[1]) > fabs(y_dot_max))  vel[1] = y_dot_max;
-
-
-    // keep only planar motion
+    
     vel[2] = 0.0f;
     vel[3] = 0.0f;
     vel[4] = 0.0f;
@@ -400,12 +440,16 @@ void computations()
     // joint velocity smoothing
     Qdot = (1.0f - qdot_lpf_alpha) * Qdot_prev + qdot_lpf_alpha * Qdot_cmd;
     Qdot_prev = Qdot;
-
+    
     // saturation
     float qn = norm_inf(Qdot);
     if (qn > qdot_limit)
         Qdot = Qdot * (qdot_limit / qn);
+        
+    // SVD<6,6,float> luJ(J);
+    // Qdot = luJ.backsub(vel);
 }
+
 
 // TCP FT receive thread (stoppable)
 void TCP_receive(std::atomic<bool>* stopFlag)
@@ -498,7 +542,7 @@ int main(int argc, char** argv)
     boost::thread vrep_thread(vrep_draw, &stop_flag);
 
     // Log file
-    std::string filepath = "/home/srisadha/powerball/src_main/Hamid/data/admittance/" + SubName + "_schunk.csv";
+    std::string filepath = "/home/srisadha/hamid_powerball/src_main/data/admittance/" + SubName + "_schunk.csv";
     std::ofstream dataFile(filepath);
     dataFile << "Time_us,"
              << "Q1,Q2,Q3,Q4,Q5,Q6,"
@@ -507,13 +551,14 @@ int main(int argc, char** argv)
              << "FT1,FT2,FT3,FT4,FT5,FT6,"
              << "F_cmd1,F_cmd2,F_cmd3,F_cmd4,F_cmd5,F_cmd6,"
              << "v_meas1,v_meas2,v_meas3,v_meas4,v_meas5,v_meas6,"
+             << "v_meas_lpf1,v_meas_lpf2,v_meas_lpf3,v_meas_lpf4,v_meas_lpf5,v_meas_lpf6,"
              << "vel1,vel2,vel3,vel4,vel5,vel6,"
              << "c_des1,c_des2,"
              << "Cd1,Cd2,Cd3,Cd4,Cd5,Cd6\n";
 
     // Hyperparameters / run metadata sidecar (written once per run)
     {
-        std::string jsonpath = "/home/srisadha/powerball/src_main/Hamid/data/admittance/json/" + SubName + "_schunk.hyperparams.json";
+        std::string jsonpath = "/home/srisadha/hamid_powerball/src_main/data/admittance/json/" + SubName + "_schunk.hyperparams.json";
         write_run_hyperparams_json(jsonpath, SubName, filepath, use_myo);
     }
 
@@ -526,8 +571,9 @@ int main(int argc, char** argv)
     boost::thread stop_thread(stop, &stop_flag);
 
     // Go to start pose (simple cosine blend)
-    Qe = Data(0.0f, -M_PI/6, M_PI/2, 0.0f, M_PI/3, 0.0f);
-    // Qe = Data(M_PI/6, -M_PI/6, M_PI/2, 0.0f, M_PI/3, 0.0f);
+    // Qe = Data(0.0f, -M_PI/6, M_PI/2, 0.0f, M_PI/3, 0.0f);  // init configuration for admittance control
+    Qe = Data(0.0f, -0.935235f, 0.88284f, 0.0f, 1.31909f, 0.0f);  // further in x direction
+    
     Vector<6,float> dQ = Qe - Q;
 
     float maxq = 0.0f;
@@ -590,6 +636,7 @@ int main(int argc, char** argv)
                  << FT_log[0] << "," << FT_log[1] << "," << FT_log[2] << "," << FT_log[3] << "," << FT_log[4] << "," << FT_log[5] << ","
                  << F_cmd[0] << "," << F_cmd[1] << "," << F_cmd[2] << "," << F_cmd[3] << "," << F_cmd[4] << "," << F_cmd[5] << ","
                  << v_meas[0] << "," << v_meas[1] << "," << v_meas[2] << "," << v_meas[3] << "," << v_meas[4] << "," << v_meas[5] << ","
+                 << v_meas_lpf[0] << "," << v_meas_lpf[1] << "," << v_meas_lpf[2] << "," << v_meas_lpf[3] << "," << v_meas_lpf[4] << "," << v_meas_lpf[5] << ","
                  << vel[0] << "," << vel[1] << "," << vel[2] << "," << vel[3] << "," << vel[4] << "," << vel[5] << ","
                  << c_des[0] << "," << c_des[1] << ","
                  << Cd_diag[0] << "," << Cd_diag[1] << "," << Cd_diag[2] << "," << Cd_diag[3] << "," << Cd_diag[4] << "," << Cd_diag[5] << "\n";

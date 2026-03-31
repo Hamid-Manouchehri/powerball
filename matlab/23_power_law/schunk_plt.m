@@ -2,24 +2,26 @@ clear; clc; close all;
 
 addpath("/home/hamid-tuf/projects/powerball/matlab/23_power_law/functions/")
 
-% read_schunk_file = "var_schunk.csv";
-read_schunk_file = "static_100_schunk.csv";
+read_schunk_file = "1d_const_100_schunk.csv";  % TODO
+save_mat_file = "1d_const_100_schunk.mat";  % TODO
 
-dir = "/home/hamid-tuf/projects/powerball/matlab/23_power_law/data/admittance/";
+csvDir = "/home/hamid-tuf/projects/powerball/matlab/23_power_law/data/admittance/";
+matDir = "/home/hamid-tuf/projects/powerball/matlab/23_power_law/data/admittance/mat/";
 
-read_schunk_file = dir + read_schunk_file;
+read_schunk_file = csvDir + read_schunk_file;
 schunk_table = readtable(read_schunk_file);
 
 t      = (schunk_table.Time_us - schunk_table.Time_us(1)) / 1e6;
 Q      = schunk_table{:,2:7};
 Qdot_a = schunk_table{:,8:13};   % Schunk angular velocity
-Qdot   = schunk_table{:,14:19};  % Input veloc6ity command (admittance control)
+Qdot   = schunk_table{:,14:19};  % Input velocity command (admittance control)
 FT     = schunk_table{:,20:25};  % Raw FT
 F_cmd  = schunk_table{:,26:31};  % FT after filtering
 v_meas = schunk_table{:,32:37};  % end-effector velocity
-vel    = schunk_table{:,38:43};  % admittance vel
-c_des  = schunk_table{:,44:45};  % admittance vel
-Cd     = schunk_table{:,46:51};  % Variable damping
+v_meas_lpf = schunk_table{:,38:43};  % end-effector velocity
+vel    = schunk_table{:,44:49};  % admittance vel
+c_des  = schunk_table{:,50:51};  % admittance vel
+Cd     = schunk_table{:,52:57};  % Variable damping
 
 schunk_numOfDataSamples = size(t, 1);
 
@@ -36,7 +38,12 @@ for i = 1:schunk_numOfDataSamples
     ee_pos(i, :) = T(4, :);
 end
 
+% save(matDir+save_mat_file, "t", "ee_pos", "ee_vel", "FT", "F_cmd", ...
+%     "v_meas", "vel", "c_des", "Cd");  % comment in case you do n't want to save the data
+
 figure(Name="ee_pos",NumberTitle="off");
+
+
 plot(ee_pos(:,1), ee_pos(:,2));
 xlabel("x");
 ylabel("y");
@@ -54,6 +61,9 @@ xlim([0.0 0.5]);
 % % ylim([-0.2, 0.5]);
 
 figure(Name="Qdot", NumberTitle="off");
+
+
+
 subplot(2,1,1);
 plot(t, Qdot_a);
 ylabel("Qdot_a");
@@ -66,6 +76,9 @@ legend(["Qdot1", "Qdot2", "Qdot3", "Qdot4", "Qdot5", "Qdot6"]);
 
 
 figure(Name="FT",NumberTitle="off");
+
+
+
 subplot(2,1,1);
 plot(t, FT);
 xlabel("Time [s]");
@@ -80,13 +93,21 @@ legend(["F_cmd_x", "F_cmd_y", "F_cmd_z", "F_cmd_rx", "F_cmd_ry", "F_cmd_rz"]);
 
 
 figure(Name="vel", NumberTitle="off");
-subplot(2,1,1)
+
+
+subplot(3,1,1)
 plot(t, v_meas);
 legend(["v_{meas_x}", "v_{meas_y}", "v_{meas_z}" ...
        ,"v_{meas_rx}", "v_{meas_ry}", "v_{meas_rz}"]);
 xlabel("Time [s]");
 ylabel("V_{meas}");
-subplot(2,1,2);
+subplot(3,1,2)
+plot(t, v_meas_lpf);
+legend(["v_{meas_x}", "v_{meas_y}", "v_{meas_z}" ...
+       ,"v_{meas_rx}", "v_{meas_ry}", "v_{meas_rz}"]);
+xlabel("Time [s]");
+ylabel("filtered V_{meas}");
+subplot(3,1,3);
 plot(t, vel);
 xlabel("Time [s]");
 ylabel("Vel");
@@ -95,6 +116,9 @@ legend(["Vx", "Vy", "Vz", "Vrx", "Vry", "Vrz"]);
 
 
 figure(Name="Cd",NumberTitle="off");
+
+
+
 subplot(2,1,1);
 plot(t, c_des(:,1), LineStyle="--");
 hold on;
@@ -112,7 +136,13 @@ xlabel("Time [s]");
 
 
 figure(Name="diff Cd",NumberTitle="off");
+
 plot(diff(Cd(:,1))./diff(t))
+
+
+
+figure(Name="V_F_D", NumberTitle="off");
+
 
 
 vel_mag = sqrt(vel(:,1).^2 + vel(:,2).^2);
@@ -120,7 +150,6 @@ F_cmd_mag = sqrt(F_cmd(:,1).^2 + F_cmd(:,2).^2);
 Cd_mag = sqrt(Cd(:,1).^2 + Cd(:,2).^2);
 F_min_x = Cd(:,1).*(-vel(:,1));
 
-figure(Name="V_F_D", NumberTitle="off");
 subplot(2,1,1);
 plot(-vel(:,1), Cd(:,1), "r.");
 xlabel("Vel magnitude");
@@ -134,6 +163,8 @@ xlim([0, 0.3]);
 
 
 figure(Name="T_F_D", NumberTitle="off");
+
+
 subplot(2,1,1);
 plot(t, Cd(:,1), "r.");
 xlabel("Time [s]");
