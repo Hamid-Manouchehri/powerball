@@ -2,7 +2,8 @@ clear; clc; close all;
 
 addpath("/home/hamid-tuf/projects/powerball/matlab/23_power_law/functions/")
 
-read_schunk_file = "1d_const_100_schunk.csv";  % TODO
+read_schunk_file = "hand_grasp_damp_10_schunk.csv";  % TODO
+save_schunk_csv = "modified_hand_grasp_damp_10_schunk.csv";  % TODO
 save_mat_file = "1d_const_100_schunk.mat";  % TODO
 
 csvDir = "/home/hamid-tuf/projects/powerball/matlab/23_power_law/data/admittance/";
@@ -38,6 +39,13 @@ for i = 1:schunk_numOfDataSamples
     ee_pos(i, :) = T(4, :);
 end
 
+% T = array2table([t, ee_pos(:,1:2), ee_vel(:,1:2), FT(:,1:2)], ...
+%     'VariableNames', {'Time', ...
+%                       'X','Y', ...
+%                       'Vx','Vy', ...
+%                       'Fx', 'Fy'});
+% writetable(T, csvDir + save_schunk_csv);
+
 % save(matDir+save_mat_file, "t", "ee_pos", "ee_vel", "FT", "F_cmd", ...
 %     "v_meas", "vel", "c_des", "Cd");  % comment in case you do n't want to save the data
 
@@ -59,6 +67,8 @@ xlim([0.0 0.5]);
 % subplot(2,1,2);
 % plot(t, ee_pos(:,2));
 % % ylim([-0.2, 0.5]);
+
+
 
 figure(Name="Qdot", NumberTitle="off");
 

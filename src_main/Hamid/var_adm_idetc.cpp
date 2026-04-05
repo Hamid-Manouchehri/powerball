@@ -49,7 +49,7 @@ static const float z_ref = 0.11563f;
 // Set to true to read and record Myo band (EMG/IMU) to a separate CSV; false to skip Myo.
 static const bool USE_MYO = false;  // TODO
 static const bool CONSTANT_DAMP = false; // TODO true: const damping, false: variable damping
-float const_damp = 100;  // TODO
+float const_damp = 10;  // TODO
 float cmin_pos = 20.0f;  // TODO
 float cmax_pos = 100.0f; // TODO
 float M_inertia = 8.0f;  // TODO
@@ -325,9 +325,9 @@ void computations()
     kin.FK_R(Q, &R);
     kin.FK_pos(Q, &X);
     
-    // cout << "FK_R:" << "\n" << R << "\n";
+    // cout << "R:" << "\n" << R << "\n";
     // cout << "Q: " << Q << "\n";
-    // cout << "FK_pos: " << X << "\n\n\n";
+    cout << "X: " << X << "\n";
     // cout << "vel[0,1]: " << vel[0] << vel[1] << "\n";
 
     newPos[0] = -X[1];
@@ -429,6 +429,21 @@ void computations()
     vel[3] = 0.0f;
     vel[4] = 0.0f;
     vel[5] = 0.0f;
+    
+    // Constrain robot workspace
+    float xmin = 0.18f, xmax = 0.5f;  // TODO
+    float ymin = -0.4f, ymax = 0.4f;  // TODO
+    float zmin = 0.11f, zmax = 0.12f;  // TODO
+    
+    if (X[0] <= xmin && vel[0] < 0.0f) vel[0] = 0.0f;
+    if (X[0] >= xmax && vel[0] > 0.0f) vel[0] = 0.0f;
+    
+    if (X[1] <= ymin && vel[1] < 0.0f) vel[1] = 0.0f;
+    if (X[1] >= ymax && vel[1] > 0.0f) vel[1] = 0.0f;
+    
+    if (X[2] <= zmin && vel[2] < 0.0f) vel[2] = 0.0f;
+    if (X[2] >= zmax && vel[2] > 0.0f) vel[2] = 0.0f; 
+    
 
     // damped least-squares IK: qdot = J^T (J J^T + lambda^2 I)^-1 vel
     A = J * J.T() + I6 * (lambda_dls * lambda_dls);
@@ -571,8 +586,8 @@ int main(int argc, char** argv)
     boost::thread stop_thread(stop, &stop_flag);
 
     // Go to start pose (simple cosine blend)
-    // Qe = Data(0.0f, -M_PI/6, M_PI/2, 0.0f, M_PI/3, 0.0f);  // init configuration for admittance control
-    Qe = Data(0.0f, -0.935235f, 0.88284f, 0.0f, 1.31909f, 0.0f);  // further in x direction
+    Qe = Data(0.0f, -M_PI/6, M_PI/2, 0.0f, M_PI/3, 0.0f);  // init configuration for admittance control
+    // Qe = Data(0.0f, -0.935235f, 0.88284f, 0.0f, 1.31909f, 0.0f);  // further in x direction
     
     Vector<6,float> dQ = Qe - Q;
 

@@ -5,7 +5,6 @@ matDir = "/home/hamid-tuf/projects/powerball/matlab/23_power_law/data/admittance
 
 
 
-
 figure(Name="V_F_D", NumberTitle="off");
 
 
@@ -91,8 +90,14 @@ ylabel("admittance vel (m/s)");
 legend(["var C", "min C", "max C", "vel"]);
 
 
+figure(Name="Cd", NumberTitle="off");
 
 
+load(matDir+read_mat_file(1));
+subplot(2,1,1);
+plot(t, c_des);
+subplot(2,1,2);
+plot(t, Cd);
 
 
 

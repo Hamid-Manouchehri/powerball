@@ -2,7 +2,8 @@ clc; clear; close all;
 
 addpath("/home/hamid-tuf/projects/powerball/matlab/23_power_law/functions/");
 
-read_schunk_csv = "low_damp_schunk_damp_10.000000.csv";  % TODO
+read_schunk_csv = "hand_grasp_damp_10_schunk.csv";  % TODO
+save_schunk_csv = "modified_hand_grasp_damp_10_schunk.csv";  % TODO
 read_myo_csv = "low_damp_myo_damp_10.000000.csv";  % TODO
 
 dir = "/home/hamid-tuf/projects/powerball/matlab/23_power_law/data/admittance/";
@@ -14,12 +15,15 @@ schunk_time_s = (schunk_table.Time_us - schunk_table.Time_us(1)) / 1e6;
 myo_table = readtable(read_myo_csv);
 myo_time_s = (myo_table.Time_us - myo_table.Time_us(1)) / 1e6;
 
+t   = schunk_table{:,1}; 
 Q   = schunk_table{:,2:7}; 
 Qd  = schunk_table{:,8:13}; 
 FT  = schunk_table{:,14:19};
 vel = schunk_table{:,20:25};  % admittance vel
 Cd  = schunk_table{:,26:31};
 schunk_numOfDataSamples = size(Q, 1);
+
+t = (t(:) - t(1)) / 1e6;
 
 myo_EMG    = myo_table{:,2:9}; 
 myo_orient = myo_table{:,10:13};  % quaternion (w, q1, q2, q3)
@@ -57,20 +61,20 @@ end
 % plot(myo_time_s, myo_lin_accel); ylabel("lin accel (m/s^2)");
 
 
-figure;
-sgtitle("Schunk Data");
-subplot(4,1,1);
-plot(schunk_time_s, Q); ylabel("Q (rad)"); 
-legend(["Q1", "Q2", "Q3", "Q4", "Q5", "Q6"]);
-subplot(4,1,2);
-plot(schunk_time_s, Qd); ylabel("Qd (rad/s)");
-legend(["Qd1", "Qd2", "Qd3", "Qd4", "Qd5", "Qd6"]);
-subplot(4,1,3);
-plot(schunk_time_s, FT(:,1:3)); ylabel("Force (N)");
-legend(["Fx", "Fy", "Fz"]);
-subplot(4,1,4);
-plot(schunk_time_s, vel(:,1:3)); ylabel("tool vel (m/s)");
-legend(["Vx", "Vy", "Vz"]);
+% figure;
+% sgtitle("Schunk Data");
+% subplot(4,1,1);
+% plot(schunk_time_s, Q); ylabel("Q (rad)"); 
+% legend(["Q1", "Q2", "Q3", "Q4", "Q5", "Q6"]);
+% subplot(4,1,2);
+% plot(schunk_time_s, Qd); ylabel("Qd (rad/s)");
+% legend(["Qd1", "Qd2", "Qd3", "Qd4", "Qd5", "Qd6"]);
+% subplot(4,1,3);
+% plot(schunk_time_s, FT(:,1:3)); ylabel("Force (N)");
+% legend(["Fx", "Fy", "Fz"]);
+% subplot(4,1,4);
+% plot(schunk_time_s, vel(:,1:3)); ylabel("tool vel (m/s)");
+% legend(["Vx", "Vy", "Vz"]);
 
 ee_pos    = zeros(schunk_numOfDataSamples,3);
 ee_orient = zeros(schunk_numOfDataSamples,3);
@@ -85,11 +89,51 @@ for i = 1:schunk_numOfDataSamples
     ee_pos(i, :) = T(4, :);
 end
 
+% save(matDir+save_mat_file, "t", "ee_pos", "ee_vel", "FT", "F_cmd", ...
+%     "v_meas", "vel", "c_des", "Cd");  % comment in case you do n't want to save the data
+
+T = array2table([t, ee_pos(:,1:2), ee_vel(:,1:2), FT(:,1:2)], ...
+    'VariableNames', {'Time', ...
+                      'eePose_x','eePose_y', ...
+                      'eeVel_x','eeVel_y', ...
+                      'Fx', 'Fy'});
+writetable(T, dir + save_schunk_csv);
+
+% figure;
+% plot(ee_pos(:,2), ee_pos(:,1), 'b.');
+% title("Maze path");
+% 
+% figure;
+% plot(Cd);
+% title("Virtual Damping");
+% legend;
+
+
 figure;
 plot(ee_pos(:,2), ee_pos(:,1), 'b.');
 title("Maze path");
 
 figure;
-plot(Cd);
-title("Virtual Damping");
-legend;
+subplot(2,1,1);
+plot(t, ee_vel(:,1));
+subplot(2,1,2);
+plot(t, ee_vel(:,2));
+title("end effector vel");
+
+figure;
+plot(t, Q);
+title("Q");
+
+figure;
+plot(t, Qd);
+title("Qd");
+
+figure;
+subplot(2,1,1);
+plot(t, FT(:,1));
+subplot(2,1,2);
+plot(t, FT(:,2));
+title("FT");
+
+% figure;
+% plot(t, Cd(:,1:2));
