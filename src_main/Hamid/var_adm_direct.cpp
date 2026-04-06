@@ -1,10 +1,7 @@
-// Cleaned version (NO new libraries added)
-// - Removed unused pieces (sgn, timeval/gettimeofday timestamp)
-// - Removed "thread per loop iteration" (computations now called directly)
-// - Made V-REP thread stoppable
-// - Made TCP receive thread stoppable (checks stop flag)
-// - Kept the same libraries you already included
-
+/*
+Implementation of the paper: Variable Admittance Control of Robot Manipulators Based on Human Intention
+Gitae Kang (2019)
+*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <cstring>
