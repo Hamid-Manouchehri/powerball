@@ -45,7 +45,6 @@ static const float z_ref = 0.11563f;
 
 // Set to true to read and record Myo band (EMG/IMU) to a separate CSV; false to skip Myo.
 static const bool USE_MYO = false;  // TODO
-static const bool CONSTANT_DAMP = false; // TODO true: const damping, false: variable damping
 float const_damp = 10;  // TODO
 float cmin_pos = 20.0f;  // TODO
 float cmax_pos = 100.0f; // TODO
@@ -57,22 +56,14 @@ float ft_scale_y = 1.0f;
 float ft_lpf_alpha   = 0.5f;   // smaller = smoother alpha=[0 1]
 float ft_deadband    = 0.05f;   // N
 
-float eps_v_meas     = 0.02f;   // TODO; avoid huge damping near zero speed
-float c_rate_max     = 100.0f;   // TODO; damping slew rate
-float dc_max = c_rate_max * dt;  // damping slew-rate limit (rate limiter)
-
 float lambda_dls     = 0.12f;   // damped least-squares IK
 
 float qdot_lpf_alpha = 0.20f;   // joint velocity smoothing; smaller = smoother
 float qdot_limit     = 30.0f * (float)M_PI / 180.0f;  //  deg/s -> rad/s
 
-float Fstd_pos = 3.0f;    // TODO
 float Fx_filt  = 0.0f;
 float Fy_filt  = 0.0f;
 float adm_time = 0.0f;
-
-float c_pos_x_prev = cmax_pos;
-float c_pos_y_prev = cmax_pos;
 
 Vector<6,float> Q      = Zeros;
 Vector<6,float> Qe     = Zeros;
@@ -84,14 +75,6 @@ Vector<6,float> F_modified = Zeros;
 Vector<6,float> F_cmd = Zeros;
 Vector<6,float> v_meas = Zeros;
 Vector<6,float> Qdot_cmd = Zeros;
-Vector<2,float> c_des = Zeros;
-
-// Vector<6,float> Md_diag = makeVector(0.3f, 0.3f, 0.3f, 0.3f, 0.3f, 0.3f);  // virtual inertia vector
-Vector<6,float> Md_diag = Ones * M_inertia;  // virtual inertia vector
-Matrix<6,6,float> Md_inv = Zeros;
-
-Vector<6,float> Cd_diag = makeVector(cmax_pos, cmax_pos, cmax_pos, cmax_pos, cmax_pos, cmax_pos);  // virtual damping vector
-Matrix<6,6,float> Cd = Cd_diag.as_diagonal();
 
 Vector<6,float> vel = Zeros;
 Vector<6,float> vel_prev = Zeros;
@@ -110,6 +93,13 @@ Vector<3,float> T_vec = makeVector(1.0f, 0.0f, 0.0f);
 Vector<3,float> T_vec_prev = T_vec;
 Vector<3,float> B_vec = makeVector(0.0f, 0.0f, 1.0f);
 Vector<3,float> N_vec = makeVector(0.0f, 1.0f, 0.0f);
+
+float beta = 0.0f;
+float c = 20.0f;  // TODO
+float m = 10.0f;  // TODO
+Vector<3,float> F_exp = Zeros;
+Matrix<3,3,float> Ci     = Zeros;
+Matrix<3,3,float> Mi_inv = Zeros;
 
 float v_meas_lpf_alpha = 0.2f;
 float ref_var_lpf_alpha = 0.8f;
@@ -191,15 +181,11 @@ static void write_run_hyperparams_json(
     f << "    \"ft_scale_y\": " << ft_scale_y << ",\n";
     f << "    \"ft_lpf_alpha\": " << ft_lpf_alpha << ",\n";
     f << "    \"ft_deadband\": " << ft_deadband << ",\n";
-    f << "    \"eps_v_meas\": " << eps_v_meas << ",\n";
-    f << "    \"c_rate_max\": " << c_rate_max << ",\n";
     f << "    \"lambda_dls\": " << lambda_dls << ",\n";
     f << "    \"qdot_lpf_alpha\": " << qdot_lpf_alpha << ",\n";
     f << "    \"qdot_limit\": " << qdot_limit << ",\n";
-    f << "    \"Fstd_pos\": " << Fstd_pos << ",\n";
-    f << "    \"cmin_pos\": " << cmin_pos << ",\n";
-    f << "    \"cmax_pos\": " << cmax_pos << ",\n";
-    f << "    \"Md_diag\": [" << Md_diag[0] << "," << Md_diag[1] << "," << Md_diag[2] << "," << Md_diag[3] << "," << Md_diag[4] << "," << Md_diag[5] << "]\n";
+    f << "    \"c\": " << c << ",\n";
+    f << "    \"m\": " << m << ",\n";
     f << "  }\n";
     f << "}\n";
 }
@@ -362,7 +348,7 @@ void computations()
     F_modified[0] = Fx_filt;
     F_modified[1] = Fy_filt;
 
-    F_cmd = Rmat * (R_F_offset * F_modified);
+    F_cmd = Rmat * (R_F_offset * F_modified);  // filtered cartesian external force in robot base frame
 
     // ---------- measured Cartesian velocity ----------
     v_meas = J * Qdot_a;
@@ -371,27 +357,24 @@ void computations()
     Vector<3,float> v3      = v_meas_lpf.slice<0,3>();
     Vector<3,float> v3_prev = v_meas_lpf_prev.slice<0,3>();
 
-    const float eps = 1e-6f;
+    const float eps  = 1e-6f;  // threshold for avoiding unstable normalization (division by zero)
     float speed      = norm(v3);
     float speed_prev = norm(v3_prev);
 
     // default: keep previous guidance if speed is tiny
     if (speed_prev > eps && speed > eps)
     {
-        Vector<3,float> vhat      = v3 / speed;
+        Vector<3,float> vhat      = v3 / speed;  // unit tangential velocity
         Vector<3,float> vhat_prev = v3_prev / speed_prev;
 
-        // Eq. (15): ref_var = (vhat(k) x vhat(k-1)) / (||v(k-1)|| * dt)
-        ref_var = (vhat ^ vhat_prev) / (speed_prev * dt);
+        ref_var = (vhat ^ vhat_prev) / (speed_prev * dt);  // Eq. (15)
 
-        // Eq. (16): LPF on reference variable
         ref_var_lpf = ref_var_lpf_alpha * ref_var_lpf_prev +
-                      (1.0f - ref_var_lpf_alpha) * ref_var;
+                      (1.0f - ref_var_lpf_alpha) * ref_var;  // Eq. (16); LPF
 
         ref_var_lpf_prev = ref_var_lpf;
 
-        // Tangent / binormal / normal
-        T_vec = vhat;
+        T_vec = vhat;  // unit tangent
 
         float refn = norm(ref_var_lpf);
         if (refn > eps)
@@ -409,14 +392,10 @@ void computations()
 
     v_meas_lpf_prev = v_meas_lpf;
 
-    // ---------- expected force, Eq. (17) ----------
-    float c = 20.0f;
-    float m = 10.0f;
-
     float kappa = norm(ref_var_lpf);   // since ref_var = kappa * B_hat
-    Vector<3,float> F_exp = m * kappa * speed * speed * N_vec + c * speed * T_vec;
+    F_exp = m * kappa * speed * speed * N_vec + c * speed * T_vec;  // Eq. (17)-expected force
 
-    // ---------- force-guidance frame ----------
+    // ---------- force-guidance frame (rotation matrix) ----------
     // x-axis: direction of expected force
     Vector<3,float> xg = T_vec;
     if (norm(F_exp) > eps)
@@ -444,7 +423,7 @@ void computations()
     Rg.T()[2] = zg;
 
     // ---------- variable admittance around expected-force direction ----------
-    float beta = 1.0f + 10.0f * speed;   // Eq. (19)
+    beta = 1.0f + 10.0f * speed;   // Eq. (19)
 
     Matrix<3,3,float> C_local = Data(
         c,          0.0f,       0.0f,
@@ -464,15 +443,15 @@ void computations()
         0.0f,              0.0f, 1.0f / (beta*m)
     );
 
-    Matrix<3,3,float> Ci     = Rg * C_local     * Rg.T();
-    Matrix<3,3,float> Mi_inv = Rg * M_local_inv * Rg.T();
+    Ci     = Rg * C_local     * Rg.T();
+    Mi_inv = Rg * M_local_inv * Rg.T();
 
     // ---------- admittance update ----------
-    Vector<3,float> f3      = F_cmd.slice<0,3>();
+    Vector<3,float> f3        = F_cmd.slice<0,3>();
     Vector<3,float> vel_prev3 = vel.slice<0,3>();
 
     Vector<3,float> acc3 = Mi_inv * (f3 - Ci * vel_prev3);
-    Vector<3,float> vel_new3 = vel_prev3 + dt * acc3;
+    Vector<3,float> vel_new3 = vel_prev3 + acc3 * dt;
 
     vel.slice<0,3>() = vel_new3;
 
@@ -585,9 +564,6 @@ int main(int argc, char** argv)
         }
     }
 
-    for (int i = 0; i < 6; i++)
-        Md_inv[i][i] = 1.0f / Md_diag[i];
-
     string SubName;
     cout << "What is subject name? ";
     cin >> SubName;
@@ -615,10 +591,12 @@ int main(int argc, char** argv)
              << "FT1,FT2,FT3,FT4,FT5,FT6,"
              << "F_cmd1,F_cmd2,F_cmd3,F_cmd4,F_cmd5,F_cmd6,"
              << "v_meas1,v_meas2,v_meas3,v_meas4,v_meas5,v_meas6,"
-             << "v_meas_lpf1,v_meas_lpf2,v_meas_lpf3,v_meas_lpf4,v_meas_lpf5,v_meas_lpf6,"
              << "vel1,vel2,vel3,vel4,vel5,vel6,"
-             << "c_des1,c_des2,"
-             << "Cd1,Cd2,Cd3,Cd4,Cd5,Cd6\n";
+             << "rf1,rf2,rf3,"
+             << "F_exp1,F_exp2,F_exp3,"
+             << "beta,"
+             << "Ci11,Ci12,Ci13,Ci21,Ci22,Ci23,Ci31,Ci32,Ci33,"
+             << "Mi_inv11,Mi_inv12,Mi_inv13,Mi_inv21,Mi_inv22,Mi_inv23,Mi_inv31,Mi_inv32,Mi_inv33\n";
 
     // Hyperparameters / run metadata sidecar (written once per run)
     {
@@ -700,10 +678,12 @@ int main(int argc, char** argv)
                  << FT_log[0] << "," << FT_log[1] << "," << FT_log[2] << "," << FT_log[3] << "," << FT_log[4] << "," << FT_log[5] << ","
                  << F_cmd[0] << "," << F_cmd[1] << "," << F_cmd[2] << "," << F_cmd[3] << "," << F_cmd[4] << "," << F_cmd[5] << ","
                  << v_meas[0] << "," << v_meas[1] << "," << v_meas[2] << "," << v_meas[3] << "," << v_meas[4] << "," << v_meas[5] << ","
-                 << v_meas_lpf[0] << "," << v_meas_lpf[1] << "," << v_meas_lpf[2] << "," << v_meas_lpf[3] << "," << v_meas_lpf[4] << "," << v_meas_lpf[5] << ","
                  << vel[0] << "," << vel[1] << "," << vel[2] << "," << vel[3] << "," << vel[4] << "," << vel[5] << ","
-                 << c_des[0] << "," << c_des[1] << ","
-                 << Cd_diag[0] << "," << Cd_diag[1] << "," << Cd_diag[2] << "," << Cd_diag[3] << "," << Cd_diag[4] << "," << Cd_diag[5] << "\n";
+                 << ref_var_lpf[0] << "," << ref_var_lpf[1] << "," << ref_var_lpf[2] << ","
+                 << F_exp[0] << "," << F_exp[1] << "," << F_exp[2] << ","
+                 << beta << ","
+                 << Ci[0][0] << "," << Ci[0][1] << "," << Ci[0][2] << "," << Ci[1][0] << "," << Ci[1][1] << "," << Ci[1][2] << "," << Ci[2][0] << "," << Ci[2][1] << "," << Ci[2][2] << ","
+                 << Mi_inv[0][0] << "," << Mi_inv[0][1] << "," << Mi_inv[0][2] << "," << Mi_inv[1][0] << "," << Mi_inv[1][1] << "," << Mi_inv[1][2] << "," << Mi_inv[2][0] << "," << Mi_inv[2][1] << "," << Mi_inv[2][2] << "\n";
 
         sleep_to_keep_dt(t0);
     }
