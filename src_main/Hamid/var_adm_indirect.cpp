@@ -66,10 +66,6 @@ float lambda_dls     = 0.12f;   // damped least-squares IK
 float qdot_lpf_alpha = 0.20f;   // joint velocity smoothing; smaller = smoother
 float qdot_limit     = 30.0f * (float)M_PI / 180.0f;  //  deg/s -> rad/s
 
-float ref_var_x_prev = 0.0f
-float ref_var_y_prev = 0.0f
-float ref_var_lpf_alpha = 0.5f;  // TODO
-
 float Fstd_pos = 3.0f;    // TODO
 float Fx_filt  = 0.0f;
 float Fy_filt  = 0.0f;
@@ -82,10 +78,6 @@ Vector<6,float> Q      = Zeros;
 Vector<6,float> Qe     = Zeros;
 Vector<6,float> Qdot   = Zeros;
 Vector<6,float> Qdot_a = Zeros;  // Schunk jonit velocity
-
-Vector<6,float> v_meas_lpf = Zeros;
-Vector<6,float> v_meas_lpf_prev = Zeros;
-float v_meas_lpf_alpha = 0.2f;
 
 Vector<3,float> X = Zeros;
 Vector<6,float> F_modified = Zeros;
@@ -103,15 +95,24 @@ Matrix<6,6,float> Cd = Cd_diag.as_diagonal();
 
 Vector<6,float> vel = Zeros;
 Vector<6,float> vel_prev = Zeros;
-Vector<6,float> ref_var = Zeros;  // reference variable
 Vector<6,float> ref_var_prev = Zeros;  // reference variable
 Vector<6,float> Qdot_prev = Zeros;
 std::mutex ft_mutex;
 
-Vector<3,float> B_vec = makeVector(0,0,1);
-Vector<3,float> T_vec = Zeros;
-Vector<3,float> T_vec_prev = Zeros;
-Vector<3,float> N_vec = Zeros;
+Vector<6,float> v_meas_lpf = Zeros;
+Vector<6,float> v_meas_lpf_prev = Zeros;
+
+Vector<3,float> ref_var = Zeros;  // reference variable
+Vector<3,float> ref_var_lpf = Zeros;
+Vector<3,float> ref_var_lpf_prev = Zeros;
+
+Vector<3,float> T_vec = makeVector(1.0f, 0.0f, 0.0f);
+Vector<3,float> T_vec_prev = T_vec;
+Vector<3,float> B_vec = makeVector(0.0f, 0.0f, 1.0f);
+Vector<3,float> N_vec = makeVector(0.0f, 1.0f, 0.0f);
+
+float v_meas_lpf_alpha = 0.2f;
+float ref_var_lpf_alpha = 0.8f;
 
 static float deadbandf(float x, float db)
 {
@@ -322,8 +323,7 @@ void computations()
     Kin kin;
 
     Matrix<6,6,float> J = Zeros;
-    Matrix<3,3,float> R = Zeros;
-    Matrix<6,6,float> Rmat = Zeros;
+    Matrix<3,3,float> R_ee = Zeros;
     Matrix<6,6,float> I6 = Zeros;
     Matrix<6,6,float> A = Zeros;
 
@@ -331,118 +331,187 @@ void computations()
         I6[i][i] = 1.0f;
 
     kin.Jacob(Q, &J);
-    kin.FK_R(Q, &R);
+    kin.FK_R(Q, &R_ee);
     kin.FK_pos(Q, &X);
-    
-    // cout << "R:" << "\n" << R << "\n";
-    // cout << "Q: " << Q << "\n";
-    // cout << "X: " << X << "\n";
-    // cout << "vel[0,1]: " << vel[0] << vel[1] << "\n";
 
     newPos[0] = -X[1];
     newPos[1] =  X[0];
     newPos[2] =  X[2];
 
-    Rmat.slice<0,0,3,3>() = R;
-    Rmat.slice<3,3,3,3>() = R;
+    // ---------- FT -> base-frame force ----------
+    Matrix<6,6,float> Rmat = Zeros;
+    Rmat.slice<0,0,3,3>() = R_ee;
+    Rmat.slice<3,3,3,3>() = R_ee;
 
-    // FT -> planar Cartesian force (thread-safe snapshot)
     Vector<6,float> FT_local = Zeros;
     {
         std::lock_guard<std::mutex> lock(ft_mutex);
         FT_local = FT;
     }
+
     float Fx_raw =  FT_local[1] * ft_scale_x;
     float Fy_raw = -FT_local[0] * ft_scale_y;
 
-    // low-pass filter (LPF)
     Fx_filt = (1.0f - ft_lpf_alpha) * Fx_filt + ft_lpf_alpha * Fx_raw;
     Fy_filt = (1.0f - ft_lpf_alpha) * Fy_filt + ft_lpf_alpha * Fy_raw;
-    
-    // deadband
+
     Fx_filt = deadbandf(Fx_filt, ft_deadband);
     Fy_filt = deadbandf(Fy_filt, ft_deadband);
 
+    F_modified = Zeros;
     F_modified[0] = Fx_filt;
     F_modified[1] = Fy_filt;
-    F_modified[2] = 0.0f;
-    F_modified[3] = 0.0f;
-    F_modified[4] = 0.0f;
-    F_modified[5] = 0.0f;
 
-    F_cmd = Rmat * (R_F_offset * F_modified);  // Convert the force from sensor frame into robot base frame.
+    F_cmd = Rmat * (R_F_offset * F_modified);
 
+    // ---------- measured Cartesian velocity ----------
     v_meas = J * Qdot_a;
     v_meas_lpf = (1.0f - v_meas_lpf_alpha) * v_meas_lpf_prev + v_meas_lpf_alpha * v_meas;
-    
-    ref_var = v_meas_lpf ^ v_meas_lpf_prev / (norm(v_meas_lpf_prev) * dt);  // equ(15)
-    ref_var_lpf = ref_var_lpf_alpha * ref_var_prev + (1 - ref_var_lpf_alpha) * ref_var  // equ(16)
-    ref_var_prev = ref_var;
 
-    T_vec = v_meas_lpf.slice<0,3>() / norm(v_meas_lpf.slice<0,3>());  // 1*3
-    B_vec = ref_var_lpf.slice<0,3>() / norm(ref_var_lpf.slice<0,3>());  // 1*3
-    N_vec = B_vec ^ T_vec;
+    Vector<3,float> v3      = v_meas_lpf.slice<0,3>();
+    Vector<3,float> v3_prev = v_meas_lpf_prev.slice<0,3>();
 
-    float kappa = norm(T_vec - T_vec_prev) / (norm(v_meas_lpf_prev.slice<0,3>())*dt);  // equ(13)
+    const float eps = 1e-6f;
+    float speed      = norm(v3);
+    float speed_prev = norm(v3_prev);
 
-    T_vec_prev = T_vec;
+    // default: keep previous guidance if speed is tiny
+    if (speed_prev > eps && speed > eps)
+    {
+        Vector<3,float> vhat      = v3 / speed;
+        Vector<3,float> vhat_prev = v3_prev / speed_prev;
+
+        // Eq. (15): ref_var = (vhat(k) x vhat(k-1)) / (||v(k-1)|| * dt)
+        ref_var = (vhat ^ vhat_prev) / (speed_prev * dt);
+
+        // Eq. (16): LPF on reference variable
+        ref_var_lpf = ref_var_lpf_alpha * ref_var_lpf_prev +
+                      (1.0f - ref_var_lpf_alpha) * ref_var;
+
+        ref_var_lpf_prev = ref_var_lpf;
+
+        // Tangent / binormal / normal
+        T_vec = vhat;
+
+        float refn = norm(ref_var_lpf);
+        if (refn > eps)
+        {
+            B_vec = ref_var_lpf / refn;   // unit binormal
+            N_vec = B_vec ^ T_vec;        // unit normal
+
+            float nn = norm(N_vec);
+            if (nn > eps)
+                N_vec /= nn;
+        }
+
+        T_vec_prev = T_vec;
+    }
+
     v_meas_lpf_prev = v_meas_lpf;
 
-
+    // ---------- expected force, Eq. (17) ----------
     float c = 20.0f;
     float m = 10.0f;
-    float F_exp = m*kappa*pow(norm(v_meas_lpf_prev.slice<0,3>()),2)*N_vec + C*norm(v_meas_lpf_prev.slice<0,3>())*T_vec;  // equ(17)
 
-    Matrix<3,3,float> C = Data(c, 0, 0,
-                               0, beta_c, 0,
-                               0, 0, beta_c);
+    float kappa = norm(ref_var_lpf);   // since ref_var = kappa * B_hat
+    Vector<3,float> F_exp = m * kappa * speed * speed * N_vec + c * speed * T_vec;
 
-    Matrix<3,3,float> Ci = Rmat*C*inv(Rmat);
+    // ---------- force-guidance frame ----------
+    // x-axis: direction of expected force
+    Vector<3,float> xg = T_vec;
+    if (norm(F_exp) > eps)
+        xg = F_exp / norm(F_exp);
 
-    Matrix<3,3,float> M = Data(m, 0, 0,
-                               0, beta_m, 0,
-                               0, 0, beta_m);
+    Vector<3,float> zg = B_vec;
+    Vector<3,float> yg = zg ^ xg;
 
-    Matrix<3,3,float> Mi = Rmat*M*inv(Rmat);
+    if (norm(yg) < eps)
+    {
+        // fallback if degenerate
+        yg = makeVector(0.0f, 1.0f, 0.0f);
+        if (fabsf(xg * yg) > 0.9f)
+            yg = makeVector(1.0f, 0.0f, 0.0f);
+        yg = yg - (yg * xg) * xg;
+    }
 
-    vel.slice<0,2>() = inv(Mi)*(F_cmd.slice<0,3>() - Ci*vel.slice<0,2>())*dt + vel_prev.slice<0,3>();
-    
-    // vel[2] = 0.0f;
+    yg /= std::max(norm(yg), eps);
+    zg = xg ^ yg;
+    zg /= std::max(norm(zg), eps);
+
+    Matrix<3,3,float> Rg = Zeros;
+    Rg.T()[0] = xg;   // columns
+    Rg.T()[1] = yg;
+    Rg.T()[2] = zg;
+
+    // ---------- variable admittance around expected-force direction ----------
+    float beta = 1.0f + 10.0f * speed;   // Eq. (19)
+
+    Matrix<3,3,float> C_local = Data(
+        c,          0.0f,       0.0f,
+        0.0f, beta * c,         0.0f,
+        0.0f,       0.0f, beta * c
+    );
+
+    Matrix<3,3,float> M_local = Data(
+        m,          0.0f,       0.0f,
+        0.0f, beta * m,         0.0f,
+        0.0f,       0.0f, beta * m
+    );
+
+    Matrix<3,3,float> M_local_inv = Data(
+        1.0f / m,              0.0f,              0.0f,
+        0.0f, 1.0f / (beta*m), 0.0f,
+        0.0f,              0.0f, 1.0f / (beta*m)
+    );
+
+    Matrix<3,3,float> Ci     = Rg * C_local     * Rg.T();
+    Matrix<3,3,float> Mi_inv = Rg * M_local_inv * Rg.T();
+
+    // ---------- admittance update ----------
+    Vector<3,float> f3      = F_cmd.slice<0,3>();
+    Vector<3,float> vel_prev3 = vel.slice<0,3>();
+
+    Vector<3,float> acc3 = Mi_inv * (f3 - Ci * vel_prev3);
+    Vector<3,float> vel_new3 = vel_prev3 + dt * acc3;
+
+    vel.slice<0,3>() = vel_new3;
+
+    // if you want strict plane holding, uncomment:
+    // float z_ref = 0.115f;
+    // float kz = 5.0f;
+    // vel[2] = kz * (z_ref - X[2]);
+
     vel[3] = 0.0f;
     vel[4] = 0.0f;
     vel[5] = 0.0f;
-    
-    // Constrain robot workspace
-    float xmin = 0.18f, xmax = 0.5f;  // TODO
-    float ymin = -0.4f, ymax = 0.4f;  // TODO
-    float zmin = 0.11f, zmax = 0.12f;  // TODO
-    
+
+    // ---------- workspace constraint ----------
+    float xmin = 0.18f, xmax = 0.50f;
+    float ymin = -0.40f, ymax = 0.40f;
+    float zmin = 0.11f, zmax = 0.12f;
+
     if (X[0] <= xmin && vel[0] < 0.0f) vel[0] = 0.0f;
     if (X[0] >= xmax && vel[0] > 0.0f) vel[0] = 0.0f;
-    
+
     if (X[1] <= ymin && vel[1] < 0.0f) vel[1] = 0.0f;
     if (X[1] >= ymax && vel[1] > 0.0f) vel[1] = 0.0f;
-    
-    if (X[2] <= zmin && vel[2] < 0.0f) vel[2] = 0.0f;
-    if (X[2] >= zmax && vel[2] > 0.0f) vel[2] = 0.0f; 
-    
 
-    // damped least-squares IK: qdot = J^T (J J^T + lambda^2 I)^-1 vel
+    if (X[2] <= zmin && vel[2] < 0.0f) vel[2] = 0.0f;
+    if (X[2] >= zmax && vel[2] > 0.0f) vel[2] = 0.0f;
+
+    // ---------- DLS IK ----------
     A = J * J.T() + I6 * (lambda_dls * lambda_dls);
 
     SVD<6,6,float> svdA(A);
     Vector<6,float> y = svdA.backsub(vel);
     Qdot_cmd = J.T() * y;
 
-    // joint velocity smoothing
     Qdot = (1.0f - qdot_lpf_alpha) * Qdot_prev + qdot_lpf_alpha * Qdot_cmd;
     Qdot_prev = Qdot;
-    
-    // saturation
+
     float qn = norm_inf(Qdot);
     if (qn > qdot_limit)
         Qdot = Qdot * (qdot_limit / qn);
-        
 }
 
 
