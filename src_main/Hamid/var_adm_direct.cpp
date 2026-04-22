@@ -1,7 +1,3 @@
-/*
-Implementation of the paper: Variable Admittance Control of Robot Manipulators Based on Human Intention
-Gitae Kang (2019)
-*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <cstring>
@@ -45,8 +41,8 @@ static const float z_ref = 0.11563f;
 
 // Set to true to read and record Myo band (EMG/IMU) to a separate CSV; false to skip Myo.
 static const bool USE_MYO = false;  // TODO
-static const bool CONSTANT_DAMP = false; // TODO true: const damping, false: variable damping
-float const_damp = 10;  // TODO
+static const bool CONSTANT_DAMP = true; // TODO true: const damping, false: variable damping
+float const_damp = 10;  // TODO  [10 or 100]
 float cmin_pos = 20.0f;  // TODO
 float cmax_pos = 100.0f; // TODO
 float M_inertia = 8.0f;  // TODO
@@ -576,6 +572,10 @@ int main(int argc, char** argv)
 
     // Robot connect
     SchunkPowerball pb;
+
+    pb.set_sdo_controlword(NODE_ALL, STATUS_OPERATION_ENABLED);
+    for (int k = NODE_1; k <= NODE_6; ++k) pb.unbrake(k);
+
     pb.update();
     Q = pb.get_pos();
 
@@ -670,7 +670,7 @@ int main(int argc, char** argv)
     if (stop_thread.joinable())
         stop_thread.detach();
 
-    pb.shutdown_motors();
+    // pb.shutdown_motors();
     pb.update();
 
     usleep(500 * 1000);

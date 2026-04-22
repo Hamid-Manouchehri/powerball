@@ -1,7 +1,10 @@
 clc; clear; close all;
 
-read_mat_file = ["1d_var_damping_rate_limit_schunk.mat", "1d_const_20_schunk.mat", "1d_const_100_schunk.mat"];
-matDir = "/home/hamid-tuf/projects/powerball/matlab/23_power_law/data/admittance/mat/";
+read_mat_file = ["1d_var_damping_rate_limit_schunk.mat",...
+                 "1d_const_20_schunk.mat", ...
+                 "1d_const_100_schunk.mat"];
+matDir = "/home/hamid-tuf/projects/powerball/matlab/" + ...
+    "kang_paper_implementation/data/admittance/mat/";
 
 
 

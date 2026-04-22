@@ -320,6 +320,10 @@ void computations()
     kin.FK_R(Q, &R_ee);
     kin.FK_pos(Q, &X);
 
+    // cout << "Q: \n" << Q << "\n";
+    // cout << "end-effector rot: \n" << R_ee << "\n";
+    // cout << "end-effector pose: " << X << "\n";
+
     newPos[0] = -X[1];
     newPos[1] =  X[0];
     newPos[2] =  X[2];
@@ -613,8 +617,8 @@ int main(int argc, char** argv)
     boost::thread stop_thread(stop, &stop_flag);
 
     // Go to start pose (simple cosine blend)
-    Qe = Data(0.0f, -M_PI/6, M_PI/2, 0.0f, M_PI/3, 0.0f);  // init configuration for admittance control
-    // Qe = Data(0.0f, -0.935235f, 0.88284f, 0.0f, 1.31909f, 0.0f);  // further in x direction
+    // Qe = Data(0.0f, -M_PI/6, M_PI/2, 0.0f, M_PI/3, 0.0f);  // init configuration for admittance control
+    Qe = Data(0.0216f, -0.302f, 1.89f, 0.0f, 0.9512f, 0.0212f);  // further in x direction
     
     Vector<6,float> dQ = Qe - Q;
 

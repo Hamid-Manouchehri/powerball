@@ -68,6 +68,10 @@ bool SchunkPowerball::set_node_sdo_controlword(uint8_t node_num, int16_t state) 
         else if (actual_state == STATUS_SWITCHED_ON) {
             canopen.RPDOwrite(1, node_num, CONTROLWORD_ENABLE_OPERATION, 0);
         }
+        else if (actual_state == STATUS_QUICK_STOP_ACTIVE) {
+            // Recover from quick-stop by issuing shutdown, then continue normal state progression.
+            canopen.RPDOwrite(1, node_num, CONTROLWORD_SHUTDOWN, 0);
+        }
         else if (actual_state == STATUS_OPERATION_ENABLED) {
         }
 
