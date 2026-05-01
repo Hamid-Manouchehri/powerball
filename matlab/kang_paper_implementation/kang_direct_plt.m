@@ -104,3 +104,42 @@ plot(t, Cd);
 
 
 
+% For HRI presentation
+figure;
+% subplot(2,1,1);
+load(matDir+read_mat_file(1));
+vel_max = max(-vel(:,1));
+vel_max_idx = find(-vel(:,1) == vel_max);
+plot(-vel(1:vel_max_idx,1), Cd(1:vel_max_idx,1), ".");
+% subplot(2,1,1);
+load(matDir+read_mat_file(2));
+hold on;
+plot(-vel(:,1), Cd(:,1));
+% subplot(2,1,1);
+load(matDir+read_mat_file(3));
+hold on;
+plot(-vel(:,1), Cd(:,1));
+xlabel("Vel X");
+ylabel("Damping X");
+% xlim([0 0.18]);
+ylim([0 110]);
+legend(["var C", "min C", "max C"]);
+fontsize(26,"points");
+
+
+
+figure;
+load(matDir+read_mat_file(1));
+plot(t, Cd(:,1), "r.");
+% subplot(2,1,1);
+load(matDir+read_mat_file(2));
+hold on;
+plot(t, Cd(:,1));
+load(matDir+read_mat_file(3));
+hold on;
+plot(t, Cd(:,1));
+xlabel("Time [s]");
+ylabel("Damping X");
+ylim([0 110]);
+legend(["var C", "min C", "max C"]);
+fontsize(26,"points")

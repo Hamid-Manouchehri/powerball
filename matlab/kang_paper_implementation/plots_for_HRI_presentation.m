@@ -13,7 +13,7 @@ read_mat_dir = "/home/hamid-tuf/projects/powerball/matlab/" + ...
     "kang_paper_implementation/data/kang_paper/mat/";
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-read_csv_file = "sub1/direct_1_schunk.csv";  % TODO
+read_csv_file = "sub1/direct_5_schunk.csv";  % TODO
 controller_flag = "direct";  % TODO; "direct" (constant damping + direct intention) or "indirect"
 
 data = read_csv_dir + read_csv_file;
@@ -67,19 +67,34 @@ end
 
 %%% plot end-effector pose + speed hitmap
 
-figure(Name="ee_pos",NumberTitle="off");
+% figure(Name="ee_pos",NumberTitle="off");
+% 
+% speed = sqrt(v_meas(:,1).^2 + v_meas(:,2).^2);
+% 
+% scatter(ee_pos(:,1), ee_pos(:,2), 20, speed, 'filled');
+% xlabel("x [m]");
+% ylabel("y [m]");
+% axis equal;
+% grid on;
+% cb = colorbar;
+% colormap jet;
+% cb.Label.String = "speed [m/s]";
+% title(read_csv_file,'Interpreter', 'none');
+
+figure('Name',"ee_pos",'NumberTitle',"off");
 
 speed = sqrt(v_meas(:,1).^2 + v_meas(:,2).^2);
-
-scatter(ee_pos(:,1), ee_pos(:,2), 20, t, 'filled');
-xlabel("x [m]");
-ylabel("y [m]");
+scatter(ee_pos(:,2), -ee_pos(:,1), 20, speed, 'filled');
+xlabel("y [m]");
+ylabel("x [m]");
 axis equal;
 grid on;
 cb = colorbar;
 colormap jet;
 cb.Label.String = "speed [m/s]";
-title(read_csv_file,'Interpreter', 'none');
+% title(read_csv_file,'Interpreter','none');
+fontsize(22, "points");
+
 
 
 figure(Name="T_V_F", NumberTitle="off");
@@ -115,6 +130,30 @@ ylabel("c_{des}");
 
 xlabel("Time [s]");
 legend(["X vel", "Y vel", "c_{des}"]);
+
+
+
+
+
+figure('Name',"ee_pos_direct_damping",'NumberTitle',"off");
+
+damping_mag = sqrt(c_des(:,1).^2 + c_des(:,2).^2);
+scatter(ee_pos(:,2), -ee_pos(:,1), 20, damping_mag, 'filled');
+xlabel("y [m]");
+ylabel("x [m]");
+axis equal;
+grid on;
+cb = colorbar;
+colormap jet;
+cb.Label.String = "damping mag [Ns/m]";
+% title(read_csv_file,'Interpreter','none');
+fontsize(22,"points");
+
+
+
+
+
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
