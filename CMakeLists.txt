@@ -138,6 +138,13 @@ target_link_libraries(admittance_pb_velMode schunk_powerball schunk_kinematics e
 add_executable(admittance_var src_main/admittance_var.cpp)
 target_link_libraries(admittance_var schunk_powerball schunk_kinematics extApi extApiPlatform pthread ${Boost_LIBRARIES} ${LAPACK_LIBRARIES})
 
+add_executable(chen_var_adm_indirect src_main/chen_var_adm_indirect.cpp)
+target_link_libraries(chen_var_adm_indirect
+    schunk_powerball schunk_kinematics
+    extApi extApiPlatform pthread
+    ${Boost_LIBRARIES} ${LAPACK_LIBRARIES}
+)
+
 add_executable(datarecord src_main/Team6/datarecord.cpp)
 target_link_libraries(datarecord schunk_powerball schunk_kinematics extApi extApiPlatform pthread myolinux dynamixel ${Boost_LIBRARIES} ${LAPACK_LIBRARIES} ${PYTHON_LIBRARIES})
 
