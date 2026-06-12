@@ -55,6 +55,12 @@ for i = 1:length(t)
     ee_pos(i, :) = T(4, :);
 end
 
+figure
+subplot(2,1,1)
+plot(v_meas(:,3));
+subplot(2,1,2)
+plot(ee_vel(:,3));
+
 speed_xy = sqrt(ee_vel(:,1).^2 + ee_vel(:,2).^2);  % m/s
 
 % Chen paper metric:

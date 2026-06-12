@@ -136,7 +136,6 @@ Vector<6,float> v_meas = Zeros;
 Vector<6,float> v_meas_lpf = Zeros;
 Vector<6,float> v_meas_lpf_prev = Zeros;
 Vector<6,float> vel = Zeros;
-Vector<3,float> euler_zyx = Zeros;
 
 Vector<2,float> intended_acc = makeVector(0.0f, 0.0f);
 Vector<2,float> intended_acc_prev = makeVector(0.0f, 0.0f);
@@ -204,27 +203,6 @@ static Vector<2,float> vec2_unit(Vector<2,float> a,
 static Vector<2,float> vec2_left_normal(Vector<2,float> a)
 {
     return makeVector(-a[1], a[0]);
-}
-
-static Vector<3,float> rotation_matrix_to_euler_zyx(
-    Matrix<3,3,float> R)
-{
-    /*
-    Convert rotation matrix to ZYX Euler angles [yaw pitch roll].
-
-    Inputs:
-        R: end-effector rotation matrix in the base frame.
-
-    Outputs:
-        euler_zyx: [yaw pitch roll] in radians.
-    */
-    float yaw = std::atan2(R[1][0], R[0][0]);
-    float pitch = std::atan2(
-        -R[2][0],
-        std::sqrt(R[2][1] * R[2][1] + R[2][2] * R[2][2]));
-    float roll = std::atan2(R[2][1], R[2][2]);
-
-    return makeVector(yaw, pitch, roll);
 }
 
 static long long now_us()
@@ -448,13 +426,13 @@ static bool candidate_respects_direction(Vector<2,float> v,
     float next_cross = vec2_cross(v, v_next);
 
     if (fabs(force_cross) > 1e-6f && force_cross * next_cross <= 0.0f)
-        return false;
+        return false;  // violated
 
     float cos_next = vec2_dot(v, v_next) / (speed * next_speed);
     float cos_force = vec2_dot(v, force) / (speed * force_norm);
 
     if (cos_force < 0.98f && cos_next <= cos_force)
-        return false;
+        return false;  // violated
 
     return true;
 }
@@ -475,6 +453,7 @@ static void compute_intended_acceleration()
     Vector<2,float> v = makeVector(v_meas_lpf[0], v_meas_lpf[1]);
     Vector<2,float> force = makeVector(F_cmd[0], F_cmd[1]);
 
+    // stop if the intention is unreliable
     float speed = vec2_norm(v);
     if (!indirect_ready || speed < min_speed_for_guidance)
     {
@@ -483,13 +462,17 @@ static void compute_intended_acceleration()
         return;
     }
 
+    // tangent-normal frame (Frenet-serret)
     Vector<2,float> tangent = vec2_unit(v, makeVector(1.0f, 0.0f));
     Vector<2,float> normal_left = vec2_left_normal(tangent);
 
+
+    // infer turning side from force
     float force_cross = vec2_cross(v, force);
     if (fabs(force_cross) > 1e-6f)
         last_turn_sign = (force_cross > 0.0f) ? 1.0f : -1.0f;
 
+    // normal accel from curvature - enforce velocity-vurvature constraint
     target_curvature = compute_target_curvature(speed);
     float normal_acc = speed * speed * target_curvature;
     normal_acc = clampf(normal_acc, 0.0f, max_intended_acc);
@@ -499,20 +482,22 @@ static void compute_intended_acceleration()
     Vector<2,float> best_acc = makeVector(0.0f, 0.0f);
     bool found_candidate = false;
 
+    // loop over candidate tangential accelerations
     for (int i = 0; i < tangential_search_points; i++)
     {
         float ratio = 0.0f;
         if (tangential_search_points > 1)
             ratio = (float)i / (float)(tangential_search_points - 1);
 
+        // create tangential acceleration candidate
         float tangent_acc = -tangential_acc_limit + 2.0f * tangential_acc_limit * ratio;
 
         tangent_acc += center_tangent_acc;
         tangent_acc = clampf(tangent_acc, -tangential_acc_limit, tangential_acc_limit);
 
-        Vector<2,float> candidate = tangent_acc * tangent + last_turn_sign * normal_acc * normal_left;
+        Vector<2,float> candidate = tangent_acc * tangent + last_turn_sign * normal_acc * normal_left;  // vdot*    
 
-        if (!candidate_respects_direction(v, force, candidate))
+        if (!candidate_respects_direction(v, force, candidate))  // check last two constraints
             continue;
 
         Vector<2,float> diff = candidate - intended_acc_prev;
@@ -529,9 +514,7 @@ static void compute_intended_acceleration()
     if (found_candidate)
         intended_acc = best_acc;
     else
-        intended_acc =
-            center_tangent_acc * tangent +
-            last_turn_sign * normal_acc * normal_left;
+        intended_acc = center_tangent_acc * tangent + last_turn_sign * normal_acc * normal_left;
 
     intended_acc_prev = intended_acc;
 }
@@ -562,9 +545,12 @@ static void update_guided_damping()
     gamma1 = 1.0f + 2.0f * speed * speed;
     gamma2 = 1.0f + 4.0f * speed * speed;
 
-    Vector<2,float> intended_force_raw = M_inertia * intended_acc + (bd_applied / gamma1) * v;
+    Vector<2,float> intended_force_raw =
+        M_inertia * intended_acc + (bd_applied / gamma1) * v;
 
-    intended_force = (1.0f - intended_force_lpf_alpha) * intended_force_prev + intended_force_lpf_alpha * intended_force_raw;
+    intended_force =
+        (1.0f - intended_force_lpf_alpha) * intended_force_prev +
+        intended_force_lpf_alpha * intended_force_raw;
     intended_force_prev = intended_force;
 
     Vector<2,float> force_fallback =
@@ -710,7 +696,6 @@ void computations()
     kin.Jacob(Q, &J);
     kin.FK_R(Q, &R_ee);
     kin.FK_pos(Q, &X);
-    euler_zyx = rotation_matrix_to_euler_zyx(R_ee);
 
     newPos[0] = -X[1];
     newPos[1] =  X[0];
@@ -847,18 +832,17 @@ int main(int argc, char** argv)
 
     boost::thread vrep_thread(vrep_draw, &stop_flag);
 
-    std::string write_data_csv_path = "/home/srisadha/hamid_powerball/src_main/data/admittance/chen_var_adm_data/" + 
-        SubName + "_chen_var_adm_schunk.csv";
+    std::string write_data_csv_path =
+        SubName + "_chen_var_adm_indirect_schunk.csv";
     std::ofstream dataFile(write_data_csv_path);
 
     dataFile << "Time_us,"
              << "Q1,Q2,Q3,Q4,Q5,Q6,"
              << "Qdot_a1,Qdot_a2,Qdot_a3,Qdot_a4,Qdot_a5,Qdot_a6,"
              << "Qdot1,Qdot2,Qdot3,Qdot4,Qdot5,Qdot6,"
-             << "X,Y,Z,"
-             << "Rx,Ry,Rz,"
              << "FT1,FT2,FT3,FT4,FT5,FT6,"
              << "F_cmd1,F_cmd2,F_cmd3,F_cmd4,F_cmd5,F_cmd6,"
+             << "F_cmd_xy,"
              << "v_meas1,v_meas2,v_meas3,v_meas4,v_meas5,v_meas6,"
              << "v_lpf1,v_lpf2,v_lpf3,v_lpf4,v_lpf5,v_lpf6,"
              << "vel1,vel2,vel3,vel4,vel5,vel6,"
@@ -869,8 +853,8 @@ int main(int argc, char** argv)
              << "intended_dir_x,intended_dir_y,"
              << "B11,B12,B21,B22,indirect_ready\n";
 
-    write_run_hyperparams_json("/home/srisadha/hamid_powerball/src_main/data/admittance/json/" + 
-        SubName + "_chen_var_adm.hyperparams.json",
+    write_run_hyperparams_json(
+        SubName + "_chen_var_adm_indirect.hyperparams.json",
         SubName,
         write_data_csv_path
     );
@@ -886,7 +870,8 @@ int main(int argc, char** argv)
 
     boost::thread stop_thread(stop, &stop_flag);
 
-    Qe = Data(0.0078f, -0.354f, 1.82f, 0.0f, 0.968f, 0.0f);  // TODO start pose
+    Qe = Data(0.0078f, -0.354f, 1.82f,
+              0.0f, 0.968f, 0.0f);  // TODO start pose
 
     Vector<6,float> dQ = Qe - Q;
 
@@ -950,15 +935,13 @@ int main(int argc, char** argv)
                  << Qdot[0] << "," << Qdot[1] << ","
                  << Qdot[2] << "," << Qdot[3] << ","
                  << Qdot[4] << "," << Qdot[5] << ","
-                 << X[0] << "," << X[1] << "," << X[2] << ","
-                 << euler_zyx[0] << "," << euler_zyx[1] << ","
-                 << euler_zyx[2] << ","
                  << FT_log[0] << "," << FT_log[1] << ","
                  << FT_log[2] << "," << FT_log[3] << ","
                  << FT_log[4] << "," << FT_log[5] << ","
                  << F_cmd[0] << "," << F_cmd[1] << ","
                  << F_cmd[2] << "," << F_cmd[3] << ","
                  << F_cmd[4] << "," << F_cmd[5] << ","
+                 << compute_planar_force_magnitude() << ","
                  << v_meas[0] << "," << v_meas[1] << ","
                  << v_meas[2] << "," << v_meas[3] << ","
                  << v_meas[4] << "," << v_meas[5] << ","
@@ -979,7 +962,6 @@ int main(int argc, char** argv)
                  << B_planar[0][0] << "," << B_planar[0][1] << ","
                  << B_planar[1][0] << "," << B_planar[1][1] << ","
                  << (indirect_ready ? 1 : 0) << "\n";
-                 
 
         sleep_to_keep_dt(t0);
     }
