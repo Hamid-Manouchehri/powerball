@@ -16,17 +16,17 @@ Note: Make the code understandable in such a way if I opened after 3 weeks or so
 
 - Project name: variable admittance control / Schunk Powerball-LWA
 - Main goal of this project: variable admittance controller on Schunk robot.
-- Operating system/environment: Ubuntu 16.04 LTS
+- Operating system/environment: Ubuntu 16.04 LTS (for C++) and Ubuntu 24.04 LTS (for Matalab)
 - Code that should not be changed without asking: -
 
-## Cpp Coding Style
+## Cpp and Matalab Coding Style
 
 - Preferred script/function organization: function based and easy to track, avoid calculating multiple things in on command
 - Function naming style: snake_case and self-explanatory
 - Variable naming style: self-explanatory, for the input files variable names with "read_RELEVANT_NAME" and output file variable names with "write_WHATEVER_RELEAVANT", if it is both input and output then "read_write_WHATEVER_RELEVANT".
 - Constant naming style: CAPITAL LETTERS
 - File naming style: self-explanatory
-- Maximum line length: 76 letters
+- Maximum line length: 80 letters
 
 ## Cpp Function Structure
 
@@ -52,6 +52,26 @@ output function_name(inputs):
 
 ```
 
+```matlab
+function output(s) = function_name(input(s))
+    %FUNCTIONNAME Short one-line summary.
+    %   Longer explanation if needed.
+    %
+    %   Inputs:
+    %       input - [FILL-IN expected type/shape/units]
+    %
+    %   Outputs:
+    %       output - [FILL-IN expected type/shape/units]
+
+    arguments
+        input [FILL-IN validation]
+    end
+
+    % Main logic here.
+
+end
+```
+
 ## Comments And Documentation
 
 - Header comments required for functions: Create a short understandable explanation of each programming file within its own file, including, what input and output is and other necessary stuffs required for getting an overview of the file code.
@@ -62,12 +82,21 @@ output function_name(inputs):
 
 ## Testing And Verification
 
+### C++
+
 - Preferred testing approach: Start with a small main() test harness and assert checks (<cassert>). Add formal unit tests (Catch2 / GoogleTest / doctest) only when the project grows.
 - Test file naming/location: Put quick smoke tests in tests/ (e.g., tests/test_math.cpp) and build them as separate test targets.
 - Minimum checks before finishing: Compile with warnings enabled (-Wall -Wextra -Wpedantic), run at least one known-input/known-output case, and hit key edge cases (zero/empty, bounds, NaN/Inf if floats, overflow if ints).
 - When tests are unavailable, verify by: Build a minimal repro in main() (or a tiny CLI), run on small deterministic inputs, compare against a hand-calculated result or a trusted reference implementation.
 - Should I run shell/build commands if available: Ask first.
 
+
+### Matlab
+- Preferred testing approach: Start with simple example scripts and `assert` checks. Use formal `matlab.unittest` only when the project grows.
+- Test file naming/location: Put simple test scripts in a `tests/` folder when useful.
+- Minimum checks before finishing: Run at least one small example with known expected output, check for errors, and verify important edge cases.
+- When tests are unavailable, verify by: Run the main script/function on a small sample input and inspect plots/output for obvious errors.
+- Should Codex run MATLAB commands if available: Ask first.
 
 <!-- ## Dependencies
 

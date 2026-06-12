@@ -332,8 +332,7 @@ static void estimate_power_law_from_history()
         Vector<2,float> p_next = position_history[i + 1];
 
         Vector<2,float> v = (p_next - p_prev) / (2.0f * dt);
-        Vector<2,float> a =
-            (p_next - 2.0f * p_now + p_prev) / (dt * dt);
+        Vector<2,float> a = (p_next - 2.0f * p_now + p_prev) / (dt * dt);
 
         float speed = vec2_norm(v);
         if (speed < min_speed_for_guidance)
@@ -428,13 +427,13 @@ static bool candidate_respects_direction(Vector<2,float> v,
     float next_cross = vec2_cross(v, v_next);
 
     if (fabs(force_cross) > 1e-6f && force_cross * next_cross <= 0.0f)
-        return false;
+        return false;  // violated
 
     float cos_next = vec2_dot(v, v_next) / (speed * next_speed);
     float cos_force = vec2_dot(v, force) / (speed * force_norm);
 
     if (cos_force < 0.98f && cos_next <= cos_force)
-        return false;
+        return false;  // violated
 
     return true;
 }
@@ -455,6 +454,7 @@ static void compute_intended_acceleration()
     Vector<2,float> v = makeVector(v_meas_lpf[0], v_meas_lpf[1]);
     Vector<2,float> force = makeVector(F_cmd[0], F_cmd[1]);
 
+    // stop if the intention is unreliable
     float speed = vec2_norm(v);
     if (!indirect_ready || speed < min_speed_for_guidance)
     {
@@ -463,14 +463,17 @@ static void compute_intended_acceleration()
         return;
     }
 
-    Vector<2,float> tangent =
-        vec2_unit(v, makeVector(1.0f, 0.0f));
+    // tangent-normal frame (Frenet-serret)
+    Vector<2,float> tangent = vec2_unit(v, makeVector(1.0f, 0.0f));
     Vector<2,float> normal_left = vec2_left_normal(tangent);
 
+
+    // infer turning side from force
     float force_cross = vec2_cross(v, force);
     if (fabs(force_cross) > 1e-6f)
         last_turn_sign = (force_cross > 0.0f) ? 1.0f : -1.0f;
 
+    // normal accel from curvature - enforce velocity-vurvature constraint
     target_curvature = compute_target_curvature(speed);
     float normal_acc = speed * speed * target_curvature;
     normal_acc = clampf(normal_acc, 0.0f, max_intended_acc);
@@ -480,25 +483,22 @@ static void compute_intended_acceleration()
     Vector<2,float> best_acc = makeVector(0.0f, 0.0f);
     bool found_candidate = false;
 
+    // loop over candidate tangential accelerations
     for (int i = 0; i < tangential_search_points; i++)
     {
         float ratio = 0.0f;
         if (tangential_search_points > 1)
             ratio = (float)i / (float)(tangential_search_points - 1);
 
-        float tangent_acc =
-            -tangential_acc_limit + 2.0f * tangential_acc_limit * ratio;
+        // create tangential acceleration candidate
+        float tangent_acc = -tangential_acc_limit + 2.0f * tangential_acc_limit * ratio;
 
         tangent_acc += center_tangent_acc;
-        tangent_acc = clampf(tangent_acc,
-                             -tangential_acc_limit,
-                             tangential_acc_limit);
+        tangent_acc = clampf(tangent_acc, -tangential_acc_limit, tangential_acc_limit);
 
-        Vector<2,float> candidate =
-            tangent_acc * tangent +
-            last_turn_sign * normal_acc * normal_left;
+        Vector<2,float> candidate = tangent_acc * tangent + last_turn_sign * normal_acc * normal_left;  // vdot*    
 
-        if (!candidate_respects_direction(v, force, candidate))
+        if (!candidate_respects_direction(v, force, candidate))  // check last two constraints
             continue;
 
         Vector<2,float> diff = candidate - intended_acc_prev;
@@ -515,9 +515,7 @@ static void compute_intended_acceleration()
     if (found_candidate)
         intended_acc = best_acc;
     else
-        intended_acc =
-            center_tangent_acc * tangent +
-            last_turn_sign * normal_acc * normal_left;
+        intended_acc = center_tangent_acc * tangent + last_turn_sign * normal_acc * normal_left;
 
     intended_acc_prev = intended_acc;
 }
