@@ -18,6 +18,7 @@ Gitae Kang (2019)
 #include <atomic>
 #include <mutex>
 #include <deque>
+#include <vector>
 #include <algorithm>
 #include <cmath>
 
@@ -108,6 +109,8 @@ Vector<3,float> N_vec = makeVector(0.0f, 1.0f, 0.0f);
 float beta = 0.0f;
 float beta_hat = 1.0f / 3.0f;
 float K_hat = 0.0f;
+float power_law_R2 = 0.0f;
+float power_law_RMSE = 0.0f;
 float curvature_hat = 0.0f;
 bool power_law_ready = false;
 
@@ -398,6 +401,11 @@ static void estimate_power_law_from_history()
     float sum_xx = 0.0f;
     float sum_xy = 0.0f;
     int count = 0;
+    std::vector<float> log_curvature_values;
+    std::vector<float> log_speed_values;
+
+    log_curvature_values.reserve((size_t)history_size);
+    log_speed_values.reserve((size_t)history_size);
 
     for (int i = 1; i < history_size - 1; i++)
     {
@@ -427,11 +435,15 @@ static void estimate_power_law_from_history()
         sum_y += y;
         sum_xx += x * x;
         sum_xy += x * y;
+        log_curvature_values.push_back(x);
+        log_speed_values.push_back(y);
         count++;
     }
 
     if (count < power_law_min_points)
     {
+        power_law_R2 = 0.0f;
+        power_law_RMSE = 0.0f;
         power_law_ready = false;
         return;
     }
@@ -439,12 +451,34 @@ static void estimate_power_law_from_history()
     float denom = (float)count * sum_xx - sum_x * sum_x;
     if (std::fabs(denom) < 1e-6f)
     {
+        power_law_R2 = 0.0f;
+        power_law_RMSE = 0.0f;
         power_law_ready = false;
         return;
     }
 
     float slope = ((float)count * sum_xy - sum_x * sum_y) / denom;
     float intercept = (sum_y - slope * sum_x) / (float)count;
+    float mean_y = sum_y / (float)count;
+    float sum_squared_error = 0.0f;
+    float total_squared_error = 0.0f;
+
+    for (int i = 0; i < count; i++)
+    {
+        float y_fit = intercept + slope * log_curvature_values[i];
+        float residual = log_speed_values[i] - y_fit;
+        float total_error = log_speed_values[i] - mean_y;
+
+        sum_squared_error += residual * residual;
+        total_squared_error += total_error * total_error;
+    }
+
+    if (total_squared_error > 1e-6f)
+        power_law_R2 = 1.0f - sum_squared_error / total_squared_error;
+    else
+        power_law_R2 = 0.0f;
+
+    power_law_RMSE = std::sqrt(sum_squared_error / (float)count);
 
     beta_hat = clampf(-slope, beta_hat_min, beta_hat_max);
     K_hat = std::exp(intercept);
@@ -754,6 +788,7 @@ int main(int argc, char** argv)
              << "rf1,rf2,rf3,"
              << "F_exp1,F_exp2,F_exp3,"
              << "beta,beta_hat,K_hat,"
+             << "power_law_R2,power_law_RMSE,"
              << "curvature_hat,power_law_ready,"
              << "Ci11,Ci12,Ci13,Ci21,Ci22,Ci23,Ci31,Ci32,Ci33,"
              << "Mi_inv11,Mi_inv12,Mi_inv13,Mi_inv21,Mi_inv22,Mi_inv23,Mi_inv31,Mi_inv32,Mi_inv33\n";
@@ -849,10 +884,12 @@ int main(int argc, char** argv)
                  << ref_var_lpf[0] << "," << ref_var_lpf[1] << "," << ref_var_lpf[2] << ","
                  << F_exp[0] << "," << F_exp[1] << "," << F_exp[2] << ","
                  << beta << "," << beta_hat << "," << K_hat << ","
+                 << power_law_R2 << "," << power_law_RMSE << ","
                  << curvature_hat << "," << (power_law_ready ? 1 : 0) << ","
                  << Ci[0][0] << "," << Ci[0][1] << "," << Ci[0][2] << "," << Ci[1][0] << "," << Ci[1][1] << "," << Ci[1][2] << "," << Ci[2][0] << "," << Ci[2][1] << "," << Ci[2][2] << ","
                  << Mi_inv[0][0] << "," << Mi_inv[0][1] << "," << Mi_inv[0][2] << "," << Mi_inv[1][0] << "," << Mi_inv[1][1] << "," << Mi_inv[1][2] << "," << Mi_inv[2][0] << "," << Mi_inv[2][1] << "," << Mi_inv[2][2] << "\n";
 
+        std::cout << K_hat << "\n";
         sleep_to_keep_dt(t0);
     }
 

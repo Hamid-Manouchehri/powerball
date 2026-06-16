@@ -19,7 +19,7 @@ import numpy as np
 
 # -------------------- User Settings --------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
-read_csv_file = SCRIPT_DIR / "data/eight_sign_kang_indirect_var_adm_schunk.csv"  # TODO
+read_csv_file = "/home/hamid-tuf/projects/powerball/matlab/VAC/raw_data/eight_chen_var_adm_schunk.csv"  # TODO
 
 num_reference_points = 400  # TODO number of points in the reference path
 center_x = 0.0  # TODO reference center x [m]

@@ -40,6 +40,7 @@ Controller:
 #include <atomic>
 #include <mutex>
 #include <deque>
+#include <vector>
 #include <cmath>
 #include <algorithm>
 
@@ -113,6 +114,8 @@ float bd_prev = cmax_pos;
 
 float beta_hat = beta_default;
 float K_hat = 0.0f;
+float power_law_R2 = 0.0f;
+float power_law_RMSE = 0.0f;
 float curvature_hat = 0.0f;
 float target_curvature = 0.0f;
 
@@ -347,6 +350,11 @@ static void estimate_power_law_from_history()
     float sum_xx = 0.0f;
     float sum_xy = 0.0f;
     int count = 0;
+    std::vector<float> log_curvature_values;
+    std::vector<float> log_speed_values;
+
+    log_curvature_values.reserve((size_t)history_size);
+    log_speed_values.reserve((size_t)history_size);
 
     for (int i = 1; i < history_size - 1; i++)
     {
@@ -375,11 +383,15 @@ static void estimate_power_law_from_history()
         sum_y += y;
         sum_xx += x * x;
         sum_xy += x * y;
+        log_curvature_values.push_back(x);
+        log_speed_values.push_back(y);
         count++;
     }
 
     if (count < power_law_min_points)
     {
+        power_law_R2 = 0.0f;
+        power_law_RMSE = 0.0f;
         indirect_ready = false;
         return;
     }
@@ -387,12 +399,34 @@ static void estimate_power_law_from_history()
     float denom = (float)count * sum_xx - sum_x * sum_x;
     if (fabs(denom) < 1e-6f)
     {
+        power_law_R2 = 0.0f;
+        power_law_RMSE = 0.0f;
         indirect_ready = false;
         return;
     }
 
     float slope = ((float)count * sum_xy - sum_x * sum_y) / denom;
     float intercept = (sum_y - slope * sum_x) / (float)count;
+    float mean_y = sum_y / (float)count;
+    float sum_squared_error = 0.0f;
+    float total_squared_error = 0.0f;
+
+    for (int i = 0; i < count; i++)
+    {
+        float y_fit = intercept + slope * log_curvature_values[i];
+        float residual = log_speed_values[i] - y_fit;
+        float total_error = log_speed_values[i] - mean_y;
+
+        sum_squared_error += residual * residual;
+        total_squared_error += total_error * total_error;
+    }
+
+    if (total_squared_error > 1e-6f)
+        power_law_R2 = 1.0f - sum_squared_error / total_squared_error;
+    else
+        power_law_R2 = 0.0f;
+
+    power_law_RMSE = std::sqrt(sum_squared_error / (float)count);
 
     beta_hat = clampf(-slope, beta_min, beta_max);
     K_hat = std::exp(intercept);
@@ -863,6 +897,7 @@ int main(int argc, char** argv)
              << "v_lpf1,v_lpf2,v_lpf3,v_lpf4,v_lpf5,v_lpf6,"
              << "vel1,vel2,vel3,vel4,vel5,vel6,"
              << "bd_desired,bd_applied,beta_hat,K_hat,"
+             << "power_law_R2,power_law_RMSE,"
              << "curvature_hat,target_curvature,gamma1,gamma2,"
              << "intended_acc_x,intended_acc_y,"
              << "intended_force_x,intended_force_y,"
@@ -970,6 +1005,7 @@ int main(int argc, char** argv)
                  << vel[4] << "," << vel[5] << ","
                  << bd_desired << "," << bd_applied << ","
                  << beta_hat << "," << K_hat << ","
+                 << power_law_R2 << "," << power_law_RMSE << ","
                  << curvature_hat << "," << target_curvature << ","
                  << gamma1 << "," << gamma2 << ","
                  << intended_acc[0] << "," << intended_acc[1] << ","

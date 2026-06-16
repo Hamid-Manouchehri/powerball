@@ -18,10 +18,11 @@ clear;
 close all;
 
 % -------------------- User Settings --------------------
-read_csv_file = "./raw_data/ellipse_chen_var_adm_schunk.csv";  % TODO
+% read_csv_file = "./raw_data/squircle_chen_var_adm_schunk.csv";  % TODO
+% read_csv_file = "./raw_data/squircle_kang_indirect_var_adm_schunk.csv";  % TODO
 subject_id = 1;       % TODO [sub1:1]
-shape_id = 1;         % TODO [eight:1, ellipse:2, clover:3, squircle:4]
-controller_id = 1;    % TODO [chen:1, kang:2]
+shape_id = 4;         % TODO [eight_sign:1, ellipse:2, four_leaves:3, squircle:4]
+controller_id = 2;    % TODO [chen:1, kang_indirect:2]
 
 write_master_csv_file = "./processed_data/master_dataset.csv";
 
