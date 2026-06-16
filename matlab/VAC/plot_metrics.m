@@ -22,24 +22,29 @@ close all;
 
 % -------------------- User Settings --------------------
 read_master_csv_file = "./processed_data/master_dataset.csv";  % TODO
-read_ch_csv_file = "./raw_data/ellipse_chen_var_adm_schunk.csv";  % TODO
-read_kg_csv_file = "./raw_data/ellipse_kang_indirect_var_adm_schunk.csv";  % TODO
-
-ch_dataset = readtable(read_ch_csv_file);
-kg_dataset = readtable(read_kg_csv_file);
+read_raw_data_dir = "./raw_data/";  % TODO raw controller CSV folder
 
 controller_ids = [1, 2];                % TODO controller numeric IDs
 controller_names = ["Chen", "Kang"];    % TODO controller plot labels
-shape_names = ["eight", "ellipse", "clover", "squircle"];  % TODO
+
+controller_file_names = [
+    "chen_var_adm_schunk"           % TODO Chen filename suffix
+    "kang_indirect_var_adm_schunk"  % TODO Kang filename suffix
+];
+
+shape_names = ["eight", "ellipse", "clover", "squircle"];  % TODO shapes
+
+beta_xlim = [0, 50];          % TODO beta plot time range [s]
+beta_ylim = [0, 0.7];    % TODO beta range [-]
+K_xlim = [0, 50];             % TODO K plot time range [s]
+K_ylim = [0, 0.30];            % TODO K range
+trajectory_speed_limits = [0, 0.20];  % TODO speed color range [m/s]
 
 metric_columns = [
     "DSJ"                       % TODO DSJ column name
     "mean_force"                % TODO mean force column name
     "path_length_error"         % TODO path error column name
     "boundary_violation_count"  % TODO boundary violation column name
-    % "beta"                      % TODO beta column name
-    % "K"                         % TODO K column name
-    % "R2"                        % TODO power-law R2 column name
 ];
 
 metric_titles = [
@@ -47,9 +52,6 @@ metric_titles = [
     "Mean Force by Controller"
     "Path Error by Controller"
     "Boundary Violation by Controller"
-    % "Beta by Controller"
-    % "K by Controller"
-    % "Power-law R2 by Controller"
 ];
 
 metric_ylabels = [
@@ -57,15 +59,43 @@ metric_ylabels = [
     "Mean force [N]"
     "Path error [m]"
     "Boundary violation count [-]"
-    "Beta [-]"
-    "K"
-    "R2 [-]"
 ];
 
 % -------------------- Read Master Dataset --------------------
 master_dataset = readtable(read_master_csv_file);
 controller_group = categorical(master_dataset.controller_id, ...
                                controller_ids, controller_names);
+
+
+% -------------------- Plot Trajectories With Speed Heatmap --------------------
+figure(Name="trajectory_speed_heatmap_by_shape_controller", ...
+       NumberTitle="off");
+tiledlayout(numel(controller_names), numel(shape_names), ...
+            "TileSpacing", "compact", "Padding", "compact");
+
+for controller_idx = 1:numel(controller_names)
+    for shape_idx = 1:numel(shape_names)
+        read_raw_csv_file = read_raw_data_dir + shape_names(shape_idx) + ...
+            "_" + controller_file_names(controller_idx) + ".csv";
+
+        raw_dataset = readtable(read_raw_csv_file);
+        speed_xy = sqrt(raw_dataset.v_meas1.^2 + raw_dataset.v_meas2.^2);
+
+        nexttile;
+        scatter(raw_dataset.X, raw_dataset.Y, 8, speed_xy, 'filled');
+        grid on;
+        axis equal;
+        clim(trajectory_speed_limits);
+
+        title(shape_names(shape_idx) + " " + controller_names(controller_idx));
+        xlabel("X [m]");
+        ylabel("Y [m]");
+    end
+end
+
+colormap turbo;
+colorbar;
+
 
 % -------------------- Plot Metrics --------------------
 figure(Name="vac_metrics_by_controller", NumberTitle="off");
@@ -86,3 +116,52 @@ for metric_idx = 1:numel(metric_columns)
     title(metric_titles(metric_idx));
 end
 
+% -------------------- Plot Beta Profiles --------------------
+figure(Name="beta_hat_profiles_by_shape_controller", NumberTitle="off");
+tiledlayout(numel(controller_names), numel(shape_names), ...
+            "TileSpacing", "compact", "Padding", "compact");
+
+for controller_idx = 1:numel(controller_names)
+    for shape_idx = 1:numel(shape_names)
+        read_raw_csv_file = read_raw_data_dir + shape_names(shape_idx) + ...
+            "_" + controller_file_names(controller_idx) + ".csv";
+
+        raw_dataset = readtable(read_raw_csv_file);
+        t = (raw_dataset.Time_us - raw_dataset.Time_us(1)) / 1e6;
+
+        nexttile;
+        plot(t, raw_dataset.beta_hat, "LineWidth", 1.1);
+        grid on;
+
+        title(shape_names(shape_idx) + " " + controller_names(controller_idx));
+        xlabel("Time [s]");
+        ylabel("\beta_{hat} [-]");
+        xlim(beta_xlim);
+        ylim(beta_ylim);
+    end
+end
+
+% -------------------- Plot K Profiles --------------------
+figure(Name="K_hat_profiles_by_shape_controller", NumberTitle="off");
+tiledlayout(numel(controller_names), numel(shape_names), ...
+            "TileSpacing", "compact", "Padding", "compact");
+
+for controller_idx = 1:numel(controller_names)
+    for shape_idx = 1:numel(shape_names)
+        read_raw_csv_file = read_raw_data_dir + shape_names(shape_idx) + ...
+            "_" + controller_file_names(controller_idx) + ".csv";
+
+        raw_dataset = readtable(read_raw_csv_file);
+        t = (raw_dataset.Time_us - raw_dataset.Time_us(1)) / 1e6;
+
+        nexttile;
+        plot(t, raw_dataset.K_hat, "LineWidth", 1.1);
+        grid on;
+
+        title(shape_names(shape_idx) + " " + controller_names(controller_idx));
+        xlabel("Time [s]");
+        ylabel("K_{hat}");
+        xlim(K_xlim);
+        ylim(K_ylim);
+    end
+end
