@@ -1,0 +1,3 @@
+subject_id,shape_id,controller_id,DSJ,duration,mean_force,path_length_error
+1,1,1,147354165649.298,38.227706,NaN,NaN
+1,2,1,147354165649.298,NaN,8.59593864245273,1.87654417634468

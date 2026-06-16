@@ -26,6 +26,10 @@ z = z0 * np.ones_like(t)
 
 center = np.column_stack((x, y, z))
 
+closed_center = np.vstack([center, center[0]])
+center_path_length = np.sum(np.linalg.norm(np.diff(closed_center, axis=0), axis=1))
+print(f"Center path length: {center_path_length:.6f} m")
+
 # ---------- tangent and normal ----------
 dx = np.gradient(x)
 dy = np.gradient(y)

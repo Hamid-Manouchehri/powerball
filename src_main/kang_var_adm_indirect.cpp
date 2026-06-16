@@ -17,6 +17,9 @@ Gitae Kang (2019)
 #include <chrono>
 #include <atomic>
 #include <mutex>
+#include <deque>
+#include <algorithm>
+#include <cmath>
 
 #include "powerball/schunk_powerball.h"
 #include "vrep/v_repClass.h"
@@ -58,6 +61,16 @@ float lambda_dls     = 0.12f;   // damped least-squares IK
 float qdot_lpf_alpha = 0.20f;   // joint velocity smoothing; smaller = smoother
 float qdot_limit     = 30.0f * (float)M_PI / 180.0f;  //  deg/s -> rad/s
 
+int power_law_window = 50;  // TODO number of velocity history samples
+int power_law_min_points = 10;  // TODO least-square minimum samples
+
+float min_speed_for_power_law = 0.005f;  // TODO minimum speed [m/s]
+float min_curvature = 0.001f;  // TODO minimum curvature [1/m]
+float max_curvature = 200.0f;  // TODO maximum curvature [1/m]
+
+float beta_hat_min = 0.0f;
+float beta_hat_max = 2.0f / 3.0f;
+
 float Fx_filt  = 0.0f;
 float Fy_filt  = 0.0f;
 float adm_time = 0.0f;
@@ -93,11 +106,17 @@ Vector<3,float> B_vec = makeVector(0.0f, 0.0f, 1.0f);
 Vector<3,float> N_vec = makeVector(0.0f, 1.0f, 0.0f);
 
 float beta = 0.0f;
+float beta_hat = 1.0f / 3.0f;
+float K_hat = 0.0f;
+float curvature_hat = 0.0f;
+bool power_law_ready = false;
+
 float c = 20.0f;  // TODO
 float m = 10.0f;  // TODO
 Vector<3,float> F_exp = Zeros;
 Matrix<3,3,float> Ci     = Zeros;
 Matrix<3,3,float> Mi_inv = Zeros;
+std::deque< Vector<2,float> > velocity_history;
 
 float v_meas_lpf_alpha = 0.2f;
 float ref_var_lpf_alpha = 0.8f;
@@ -205,6 +224,13 @@ static void write_run_hyperparams_json(
     f << "    \"qdot_limit\": " << qdot_limit << ",\n";
     f << "    \"c\": " << c << ",\n";
     f << "    \"m\": " << m << ",\n";
+    f << "    \"power_law_window\": " << power_law_window << ",\n";
+    f << "    \"power_law_min_points\": "
+      << power_law_min_points << ",\n";
+    f << "    \"min_speed_for_power_law\": "
+      << min_speed_for_power_law << ",\n";
+    f << "    \"min_curvature\": " << min_curvature << ",\n";
+    f << "    \"max_curvature\": " << max_curvature << "\n";
     f << "  }\n";
     f << "}\n";
 }
@@ -321,6 +347,110 @@ static float clampf(float x, float lo, float hi)
     return x;
 }
 
+static float vec2_dot(Vector<2,float> a, Vector<2,float> b)
+{
+    return a[0] * b[0] + a[1] * b[1];
+}
+
+static float vec2_cross(Vector<2,float> a, Vector<2,float> b)
+{
+    return a[0] * b[1] - a[1] * b[0];
+}
+
+static float vec2_norm(Vector<2,float> a)
+{
+    return std::sqrt(vec2_dot(a, a));
+}
+
+static void push_power_law_history()
+{
+    Vector<2,float> velocity_xy = makeVector(v_meas[0], v_meas[1]);
+
+    velocity_history.push_back(velocity_xy);
+
+    int max_history_size = power_law_window + 2;
+    while ((int)velocity_history.size() > max_history_size)
+        velocity_history.pop_front();
+}
+
+static void estimate_power_law_from_history()
+{
+    /*
+    Fits the power law:
+        v = K * kappa^(-beta)
+
+    Log form used for least squares:
+        log(v) = log(K) - beta * log(kappa)
+
+    Inputs:
+        velocity_history: recent measured Cartesian velocities [m/s].
+
+    Outputs:
+        K_hat: estimated velocity gain.
+        beta_hat: estimated power-law exponent.
+        curvature_hat: most recent valid curvature estimate [1/m].
+    */
+
+    int history_size = (int)velocity_history.size();
+
+    float sum_x = 0.0f;
+    float sum_y = 0.0f;
+    float sum_xx = 0.0f;
+    float sum_xy = 0.0f;
+    int count = 0;
+
+    for (int i = 1; i < history_size - 1; i++)
+    {
+        Vector<2,float> v_prev = velocity_history[i - 1];
+        Vector<2,float> v = velocity_history[i];
+        Vector<2,float> v_next = velocity_history[i + 1];
+
+        Vector<2,float> a = (v_next - v_prev) / (2.0f * dt);
+
+        float speed = vec2_norm(v);
+        if (speed < min_speed_for_power_law)
+            continue;
+
+        float curvature = std::fabs(vec2_cross(v, a)) /
+                          (speed * speed * speed);
+
+        if (curvature < min_curvature)
+            continue;
+
+        curvature = clampf(curvature, min_curvature, max_curvature);
+        curvature_hat = curvature;
+
+        float x = std::log(curvature);
+        float y = std::log(speed);
+
+        sum_x += x;
+        sum_y += y;
+        sum_xx += x * x;
+        sum_xy += x * y;
+        count++;
+    }
+
+    if (count < power_law_min_points)
+    {
+        power_law_ready = false;
+        return;
+    }
+
+    float denom = (float)count * sum_xx - sum_x * sum_x;
+    if (std::fabs(denom) < 1e-6f)
+    {
+        power_law_ready = false;
+        return;
+    }
+
+    float slope = ((float)count * sum_xy - sum_x * sum_y) / denom;
+    float intercept = (sum_y - slope * sum_x) / (float)count;
+
+    beta_hat = clampf(-slope, beta_hat_min, beta_hat_max);
+    K_hat = std::exp(intercept);
+    power_law_ready = true;
+}
+
 
 // Compute admittance -> Qdot
 void computations()
@@ -376,7 +506,10 @@ void computations()
 
     // ---------- measured Cartesian velocity ----------
     v_meas = J * Qdot_a;
-    v_meas_lpf = (1.0f - v_meas_lpf_alpha) * v_meas_lpf_prev + v_meas_lpf_alpha * v_meas;
+    v_meas_lpf = (1.0f - v_meas_lpf_alpha) * v_meas_lpf_prev +
+                 v_meas_lpf_alpha * v_meas;
+    push_power_law_history();
+    estimate_power_law_from_history();
 
     Vector<3,float> v3      = v_meas_lpf.slice<0,3>();
     Vector<3,float> v3_prev = v_meas_lpf_prev.slice<0,3>();
@@ -489,7 +622,7 @@ void computations()
     vel[5] = 0.0f;
 
     // ---------- workspace constraint ----------
-    float xmin = 0.18f, xmax = 0.50f;
+    float xmin = 0.18f, xmax = 0.55f;
     float ymin = -0.40f, ymax = 0.40f;
     float zmin = 0.11f, zmax = 0.12f;
 
@@ -620,7 +753,8 @@ int main(int argc, char** argv)
              << "vel1,vel2,vel3,vel4,vel5,vel6,"
              << "rf1,rf2,rf3,"
              << "F_exp1,F_exp2,F_exp3,"
-             << "beta,"
+             << "beta,beta_hat,K_hat,"
+             << "curvature_hat,power_law_ready,"
              << "Ci11,Ci12,Ci13,Ci21,Ci22,Ci23,Ci31,Ci32,Ci33,"
              << "Mi_inv11,Mi_inv12,Mi_inv13,Mi_inv21,Mi_inv22,Mi_inv23,Mi_inv31,Mi_inv32,Mi_inv33\n";
 
@@ -714,7 +848,8 @@ int main(int argc, char** argv)
                  << vel[0] << "," << vel[1] << "," << vel[2] << "," << vel[3] << "," << vel[4] << "," << vel[5] << ","
                  << ref_var_lpf[0] << "," << ref_var_lpf[1] << "," << ref_var_lpf[2] << ","
                  << F_exp[0] << "," << F_exp[1] << "," << F_exp[2] << ","
-                 << beta << ","
+                 << beta << "," << beta_hat << "," << K_hat << ","
+                 << curvature_hat << "," << (power_law_ready ? 1 : 0) << ","
                  << Ci[0][0] << "," << Ci[0][1] << "," << Ci[0][2] << "," << Ci[1][0] << "," << Ci[1][1] << "," << Ci[1][2] << "," << Ci[2][0] << "," << Ci[2][1] << "," << Ci[2][2] << ","
                  << Mi_inv[0][0] << "," << Mi_inv[0][1] << "," << Mi_inv[0][2] << "," << Mi_inv[1][0] << "," << Mi_inv[1][1] << "," << Mi_inv[1][2] << "," << Mi_inv[2][0] << "," << Mi_inv[2][1] << "," << Mi_inv[2][2] << "\n";
 

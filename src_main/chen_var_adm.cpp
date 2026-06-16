@@ -151,7 +151,7 @@ Vector<6,float> Cd_diag = makeVector(cmax_pos, cmax_pos, cmax_pos,
                                      cmax_pos, cmax_pos, cmax_pos);
 Vector<6,float> Md_diag = Ones * M_inertia;
 
-std::deque< Vector<2,float> > position_history;
+std::deque< Vector<2,float> > velocity_history;
 std::mutex ft_mutex;
 
 Matrix<6,6,float> R_F_offset = Data(
@@ -311,14 +311,15 @@ static float rate_limit_damping(float desired_damping,
     return previous_damping + damping_step;
 }
 
-static void push_position_history()
+static void push_power_law_history()
 {
-    Vector<2,float> position_xy = makeVector(X[0], X[1]);
-    position_history.push_back(position_xy);
+    Vector<2,float> velocity_xy = makeVector(v_meas[0], v_meas[1]);
+
+    velocity_history.push_back(velocity_xy);
 
     int max_history_size = power_law_window + 2;
-    while ((int)position_history.size() > max_history_size)
-        position_history.pop_front();
+    while ((int)velocity_history.size() > max_history_size)
+        velocity_history.pop_front();
 }
 
 static void estimate_power_law_from_history()
@@ -331,7 +332,7 @@ static void estimate_power_law_from_history()
         log(v) = log(K) - beta * log(kappa)
 
     Inputs:
-        position_history: recent planar end-effector positions [m].
+        velocity_history: recent measured Cartesian velocities [m/s].
 
     Outputs:
         K_hat: estimated velocity gain.
@@ -339,7 +340,7 @@ static void estimate_power_law_from_history()
         curvature_hat: most recent valid curvature estimate [1/m].
     */
 
-    int history_size = (int)position_history.size();
+    int history_size = (int)velocity_history.size();
 
     float sum_x = 0.0f;
     float sum_y = 0.0f;
@@ -349,12 +350,11 @@ static void estimate_power_law_from_history()
 
     for (int i = 1; i < history_size - 1; i++)
     {
-        Vector<2,float> p_prev = position_history[i - 1];
-        Vector<2,float> p_now = position_history[i];
-        Vector<2,float> p_next = position_history[i + 1];
+        Vector<2,float> v_prev = velocity_history[i - 1];
+        Vector<2,float> v = velocity_history[i];
+        Vector<2,float> v_next = velocity_history[i + 1];
 
-        Vector<2,float> v = (p_next - p_prev) / (2.0f * dt);
-        Vector<2,float> a = (p_next - 2.0f * p_now + p_prev) / (dt * dt);
+        Vector<2,float> a = (v_next - v_prev) / (2.0f * dt);
 
         float speed = vec2_norm(v);
         if (speed < min_speed_for_guidance)
@@ -746,7 +746,7 @@ void computations()
         v_meas_lpf_alpha * v_meas;
     v_meas_lpf_prev = v_meas_lpf;
 
-    push_position_history();
+    push_power_law_history();
     estimate_power_law_from_history();
     compute_intended_acceleration();
     update_guided_damping();
