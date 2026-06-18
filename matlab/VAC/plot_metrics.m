@@ -16,6 +16,7 @@
 %   6) K by controller
 %   7) R2 of power-law fit by controller
 %   8) RMSE of power-law fit by controller
+%   9) DSJ heatmap over XY trajectory
 
 clc;
 clear;
@@ -42,6 +43,7 @@ K_ylim = [0, 0.30];            % TODO K range
 trajectory_speed_limits = [0, 0.20];  % TODO speed color range [m/s]
 R2_ylim = [0, 1];                      % TODO R2 axis range [-]
 RMSE_ylim = [0, 0.5];                  % TODO RMSE axis range
+DSJ_scale = 1e9;                       % TODO divide DSJ in heatmap
 
 metric_columns = [
     "DSJ"                       % TODO DSJ column name
@@ -91,6 +93,42 @@ for controller_idx = 1:numel(controller_names)
         grid on;
         axis equal;
         clim(trajectory_speed_limits);
+
+        title(shape_names(shape_idx) + " " + controller_names(controller_idx));
+        xlabel("X [m]");
+        ylabel("Y [m]");
+    end
+end
+
+colormap turbo;
+colorbar;
+
+% -------------------- Plot DSJ Heatmap Over XY Trajectory --------------------
+DSJ_min = min(master_dataset.DSJ) / DSJ_scale;
+DSJ_max = max(master_dataset.DSJ) / DSJ_scale;
+
+figure(Name="DSJ_heatmap_over_xy_trajectory", NumberTitle="off");
+tiledlayout(numel(controller_names), numel(shape_names), ...
+            "TileSpacing", "compact", "Padding", "compact");
+
+for controller_idx = 1:numel(controller_names)
+    for shape_idx = 1:numel(shape_names)
+        read_raw_csv_file = read_raw_data_dir + shape_names(shape_idx) + ...
+            "_" + controller_file_names(controller_idx) + ".csv";
+
+        row_idx = master_dataset.shape_id == shape_idx & ...
+                  master_dataset.controller_id == ...
+                  controller_ids(controller_idx);
+
+        raw_dataset = readtable(read_raw_csv_file);
+        DSJ_value = mean(master_dataset.DSJ(row_idx)) / DSJ_scale;
+        DSJ_color = DSJ_value * ones(size(raw_dataset.X));
+
+        nexttile;
+        scatter(raw_dataset.X, raw_dataset.Y, 8, DSJ_color, 'filled');
+        grid on;
+        axis equal;
+        clim([DSJ_min, DSJ_max]);
 
         title(shape_names(shape_idx) + " " + controller_names(controller_idx));
         xlabel("X [m]");

@@ -19,8 +19,9 @@ Note: Make the code understandable in such a way if I opened after 3 weeks or so
 - Operating system/environment: Ubuntu 16.04 LTS (for C++) and Ubuntu 24.04 LTS (for Matalab)
 - Code that should not be changed without asking: -
 
-## Cpp and Matalab Coding Style
+## Cpp and Matlab Coding Style
 
+- Matlab: Implement this in simple MATLAB style. Use clear sections, visible formulas, and comments for the main logic. After editing, explain the file at high level and list the variables I can safely change.
 - Preferred script/function organization: function based and easy to track, avoid calculating multiple things in on command
 - Function naming style: snake_case and self-explanatory
 - Variable naming style: self-explanatory, for the input files variable names with "read_RELEVANT_NAME" and output file variable names with "write_WHATEVER_RELEAVANT", if it is both input and output then "read_write_WHATEVER_RELEVANT".
