@@ -23,7 +23,7 @@ close all;
 % read_csv_file = "./raw_data/squircle_kang_indirect_var_adm_schunk.csv";  % TODO
 subject_id = 1;       % TODO [sub1:1]
 shape_id = 4;         % TODO [eight_sign:1, ellipse:2, four_leaves:3, squircle:4]
-controller_id = 2;    % TODO [chen:1, kang_indirect:2]
+controller_id = 1;    % TODO [chen:1, kang_indirect:2]
 reference_path_length = 3 * 1.1228;  % TODO [eight_sign:1.076, ellipse:0.9688,
 %  four_leaves:1.211, squircle:1.1228] m for 3 repetitions
 

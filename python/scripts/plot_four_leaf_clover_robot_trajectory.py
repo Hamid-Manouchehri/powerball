@@ -20,8 +20,8 @@ import numpy as np
 
 # -------------------- User Settings --------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
-read_csv_file = "/home/hamid-tuf/projects/powerball/matlab/VAC/raw_data/clover_kang_indirect_var_adm_schunk.csv"  # TODO
-
+read_csv_file = "/home/hamid-tuf/projects/powerball/matlab/VAC/raw_data/clover_chen_var_adm_schunk.csv"  # TODO
+# read_csv_file = "/home/hamid-tuf/projects/powerball/matlab/VAC/raw_data/clover_kang_indirect_var_adm_schunk.csv"  # TODO
 num_reference_points = 600  # TODO number of reference points
 center_x = 0.0  # TODO clover center x [m]
 center_y = 0.0  # TODO clover center y [m]

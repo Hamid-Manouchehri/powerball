@@ -15,6 +15,7 @@
 %   5) beta by controller
 %   6) K by controller
 %   7) R2 of power-law fit by controller
+%   8) RMSE of power-law fit by controller
 
 clc;
 clear;
@@ -39,6 +40,8 @@ beta_ylim = [0, 0.7];    % TODO beta range [-]
 K_xlim = [0, 50];             % TODO K plot time range [s]
 K_ylim = [0, 0.30];            % TODO K range
 trajectory_speed_limits = [0, 0.20];  % TODO speed color range [m/s]
+R2_ylim = [0, 1];                      % TODO R2 axis range [-]
+RMSE_ylim = [0, 0.5];                  % TODO RMSE axis range
 
 metric_columns = [
     "DSJ"                       % TODO DSJ column name
@@ -65,6 +68,8 @@ metric_ylabels = [
 master_dataset = readtable(read_master_csv_file);
 controller_group = categorical(master_dataset.controller_id, ...
                                controller_ids, controller_names);
+shape_group = categorical(master_dataset.shape_id, ...
+                          1:numel(shape_names), shape_names);
 
 
 % -------------------- Plot Trajectories With Speed Heatmap --------------------
@@ -96,10 +101,72 @@ end
 colormap turbo;
 colorbar;
 
+% -------------------- Plot Duration --------------------
+duration_values = nan(numel(shape_names), numel(controller_names));
+
+for shape_idx = 1:numel(shape_names)
+    for controller_idx = 1:numel(controller_names)
+        row_idx = master_dataset.shape_id == shape_idx & ...
+                  master_dataset.controller_id == ...
+                  controller_ids(controller_idx);
+
+        duration_values(shape_idx, controller_idx) = ...
+            mean(master_dataset.duration(row_idx));
+    end
+end
+
+figure(Name="duration_by_shape_and_controller", NumberTitle="off");
+bar(categorical(shape_names), duration_values, "grouped");
+grid on;
+
+xlabel("Shape");
+ylabel("Duration [s]");
+title("Duration by Shape and Controller");
+legend(controller_names, "Location", "best");
+
+% -------------------- Plot Power-Law Fit Quality --------------------
+R2_values = nan(numel(shape_names), numel(controller_names));
+RMSE_values = nan(numel(shape_names), numel(controller_names));
+
+for shape_idx = 1:numel(shape_names)
+    for controller_idx = 1:numel(controller_names)
+        row_idx = master_dataset.shape_id == shape_idx & ...
+                  master_dataset.controller_id == ...
+                  controller_ids(controller_idx);
+
+        R2_values(shape_idx, controller_idx) = ...
+            mean(master_dataset.R2(row_idx));
+        RMSE_values(shape_idx, controller_idx) = ...
+            mean(master_dataset.RMSE(row_idx));
+    end
+end
+
+figure(Name="power_law_fit_quality_by_shape_controller", ...
+       NumberTitle="off");
+tiledlayout(1, 2, "TileSpacing", "compact", "Padding", "compact");
+
+nexttile;
+bar(categorical(shape_names), R2_values, "grouped");
+grid on;
+xlabel("Shape");
+ylabel("R2 [-]");
+title("Power-Law R2");
+ylim(R2_ylim);
+legend(controller_names, "Location", "best");
+
+nexttile;
+bar(categorical(shape_names), RMSE_values, "grouped");
+grid on;
+xlabel("Shape");
+ylabel("RMSE [-]");
+title("Power-Law RMSE");
+ylim(RMSE_ylim);
+legend(controller_names, "Location", "best");
+
 
 % -------------------- Plot Metrics --------------------
 figure(Name="vac_metrics_by_controller", NumberTitle="off");
-tiledlayout(3, 3, "TileSpacing", "compact", "Padding", "compact");
+tiledlayout(2, 2, "TileSpacing", "compact", "Padding", "compact");
 
 for metric_idx = 1:numel(metric_columns)
     metric_column = metric_columns(metric_idx);
