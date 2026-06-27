@@ -1,4 +1,4 @@
-# VAC MATLAB Overview
+# VAC MATLAB Overview (High-level overview of scripts and datasets)
 
 This folder contains MATLAB scripts for analyzing variable admittance
 control (VAC) experiments on the Schunk robot and comparing them with
@@ -41,6 +41,19 @@ plot_metrics.m
 ```
 
 ```text
+robot raw CSV files
+        |
+        v
+compute_windowed_DSJ_.m
+        |
+        v
+processed_data/window_metrics.csv
+        |
+        v
+plot_windowed_DSJ_trajectory_heatmap.m
+```
+
+```text
 raw_data/free_hand/*.csv
         |
         v
@@ -48,9 +61,6 @@ compute_free_hand_powerlaw.m
         |
         v
 processed_data/free_hand_powerlaw.csv
-        |
-        v
-plot_powerlaw_freehand_and_robot.m
 ```
 
 ## Shape And Controller IDs
@@ -81,6 +91,11 @@ Current scripts use these IDs in `master_dataset.csv`:
 - Created by `compute_free_hand_powerlaw.m`.
 - Used by `plot_powerlaw_freehand_and_robot.m`.
 
+`processed_data/window_metrics.csv`
+
+- Created by `compute_windowed_DSJ_.m`.
+- Stores profile metrics with one row per time/sample window.
+
 `master_dataset.csv` is the main robot metric table. It stores one row per
 subject, shape, and controller case.
 
@@ -89,6 +104,16 @@ Typical columns:
 ```text
 subject_id, shape_id, controller_id, DSJ, duration, mean_force,
 path_length_error, boundary_violation_count, beta, K, R2, RMSE
+```
+
+`window_metrics.csv` is the robot profile metric table. It stores many
+rows per subject, shape, and controller case.
+
+Typical columns:
+
+```text
+subject_id, shape_id, controller_id, metric_name, window_id,
+start_time_s, end_time_s, center_time_s, value
 ```
 
 ## Script Descriptions
@@ -121,6 +146,12 @@ path_length_error, boundary_violation_count, beta, K, R2, RMSE
 - Processes all shape/controller files listed in its settings.
 - Updates `master_dataset.csv`.
 
+`compute_windowed_DSJ_.m`
+
+- Computes DSJ over fixed-size sample windows.
+- Processes all shape/controller files listed in its settings.
+- Writes `processed_data/window_metrics.csv`.
+
 `compute_free_hand_powerlaw.m`
 
 - Computes whole-shape power-law values from free-hand samples.
@@ -135,10 +166,16 @@ path_length_error, boundary_violation_count, beta, K, R2, RMSE
 - Reads `master_dataset.csv` and raw robot logs.
 - Compares trajectories, DSJ, duration, fit quality, beta, and K.
 
-`plot_powerlaw_freehand_and_robot.m`
+`plot_windowed_DSJ_trajectory_heatmap.m`
 
-- Compares whole-shape `beta` from robot and free-hand data.
-- Reads `master_dataset.csv` and `free_hand_powerlaw.csv`.
+- Reads `window_metrics.csv` and raw robot logs.
+- Plots XY trajectories colored by windowed DSJ values.
+- Use this to see where smoothness changes along the shape path.
+
+`plot_VAC_main.m`
+
+- Launcher script for the main VAC plot scripts.
+- Keeps detailed plotting logic inside focused plot files.
 
 ### Data Collection Script
 
@@ -156,9 +193,11 @@ path_length_error, boundary_violation_count, beta, K, R2, RMSE
 3. Run metric scripts to fill `processed_data/master_dataset.csv`.
 4. Run `compute_powerlaw.m` to add `beta`, `K`, `R2`, and `RMSE`.
 5. Run `plot_metrics.m` to inspect robot controller results.
-6. For free-hand comparison, collect data with `maze_INK.m`.
-7. Run `compute_free_hand_powerlaw.m`.
-8. Run `plot_powerlaw_freehand_and_robot.m`.
+6. Run `compute_windowed_DSJ_.m` for DSJ profile data.
+7. Run `plot_windowed_DSJ_trajectory_heatmap.m` for DSJ profiles.
+8. For free-hand comparison, collect data with `maze_INK.m`.
+9. Run `compute_free_hand_powerlaw.m`.
+10. Run `plot_VAC_main.m` when you want the main plots together.
 
 ## Meaning Of Main Metrics
 
@@ -183,10 +222,13 @@ main values that are expected to change:
 | `read_csv_file` | Single-trial metric scripts. |
 | `read_raw_data_dir` | Scripts that process many robot raw files. |
 | `write_master_csv_file` | Scripts that update `master_dataset.csv`. |
+| `write_window_metrics_csv_file` | `compute_windowed_DSJ_.m`. |
 | `shape_id`, `shape_ids`, `shape_names` | Shape selection and labels. |
 | `controller_id`, `controller_ids` | Controller selection. |
 | `controller_names` | Controller labels used in plots. |
 | `reference_path_length` | `compute_path_length_error.m`. |
+| `window_size_samples` | Number of samples in each DSJ window. |
+| `window_step_samples` | Number of samples between DSJ windows. |
 | `min_speed`, `min_curvature`, `max_curvature` | Power-law fitting filters. |
 | `beta_min`, `beta_max` | Power-law beta limits. |
 
