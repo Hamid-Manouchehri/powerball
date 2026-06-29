@@ -7,9 +7,12 @@ free-hand drawing data.
 The main idea is simple:
 
 1. Raw CSV logs are stored in `raw_data/`.
-2. Metric scripts compute one metric for one case or all cases.
-3. Results are saved into `processed_data/`.
-4. Plot scripts read the processed data and make comparison figures.
+2. Most metric scripts compute one metric for one manually selected file.
+3. Results are saved or updated in `processed_data/`.
+4. Plot scripts read raw and processed data to make comparison figures.
+
+Most metric scripts are intentionally **single-file scripts**. You edit the
+`User Settings` section, run the script, then repeat for the next trial.
 
 ## Folder Layout
 
@@ -24,20 +27,23 @@ The main idea is simple:
 ## Main Data Flow
 
 ```text
-robot raw CSV files
+one robot raw CSV
         |
         v
-compute_DSJ.m
-compute_duration.m
-compute_mean_force.m
-compute_path_length_error.m
-compute_powerlaw.m
+compute_DSJ_1.m
+compute_duration_2.m
+compute_mean_force_3.m
+compute_path_length_error_4.m
+compute_powerlaw_5.m
         |
         v
 processed_data/master_dataset.csv
+or
+processed_data/master_dataset_chen_ls_kf_study.csv
         |
         v
 plot_metrics.m
+plot_chen_ls_vs_kf_task_metrics.m
 ```
 
 ```text
@@ -54,10 +60,24 @@ plot_windowed_DSJ_trajectory_heatmap.m
 ```
 
 ```text
-raw_data/free_hand/*.csv
+robot and free-hand raw CSV files
         |
         v
-compute_free_hand_powerlaw.m
+compute_velocity_peaks.m
+        |
+        v
+processed_data/velocity_profiles.csv
+processed_data/velocity_peaks.csv
+        |
+        v
+plot_velocity_peaks.m
+```
+
+```text
+one free-hand CSV
+        |
+        v
+compute_free_hand_powerlaw_5.m
         |
         v
 processed_data/free_hand_powerlaw.csv
@@ -65,36 +85,71 @@ processed_data/free_hand_powerlaw.csv
 
 ## Shape And Controller IDs
 
-Current scripts use these IDs in `master_dataset.csv`:
+Current shape IDs:
 
 | ID | Shape |
 | --- | --- |
 | 1 | `eight` |
 | 2 | `ellipse` |
-| 3 | `clover` |
+| 3 | `clover` / `four_leaves` |
 | 4 | `squircle` |
+
+General controller IDs used by the older Chen vs Kang workflow:
 
 | ID | Controller |
 | --- | --- |
 | 1 | `Chen` |
-| 2 | `Kang` |
+| 2 | `Kang indirect` |
+
+Chen-LS vs Chen-KF study controller IDs:
+
+| ID | Controller |
+| --- | --- |
+| 3 | `Chen-LS` |
+| 4 | `Chen-KF` |
+
+Free-hand data uses controller ID `0`.
+
+Keep these IDs consistent inside one CSV. Do not let the same controller ID
+mean different things inside the same master dataset.
 
 ## Important CSV Files
 
 `processed_data/master_dataset.csv`
 
-- Created by metric scripts and `compute_powerlaw.m`.
-- Used by `plot_metrics.m` and `plot_powerlaw_freehand_and_robot.m`.
+- Created by metric scripts and `compute_powerlaw_5.m`.
+- Used by `plot_metrics.m`.
+
+`processed_data/master_dataset_chen_ls_kf_study.csv`
+
+- Study-specific robot metric table for Chen-LS vs Chen-KF.
+- Uses controller IDs `3` and `4`.
+- Used by `plot_chen_ls_vs_kf_task_metrics.m`.
 
 `processed_data/free_hand_powerlaw.csv`
 
-- Created by `compute_free_hand_powerlaw.m`.
-- Used by `plot_powerlaw_freehand_and_robot.m`.
+- Updated by `compute_free_hand_powerlaw_5.m`.
 
 `processed_data/window_metrics.csv`
 
 - Created by `compute_windowed_DSJ_.m`.
 - Stores profile metrics with one row per time/sample window.
+
+`processed_data/velocity_profiles.csv`
+
+- Created by `compute_velocity_peaks.m`.
+- Stores sample-by-sample XY speed profiles.
+
+`processed_data/velocity_peaks.csv`
+
+- Created by `compute_velocity_peaks.m`.
+- Stores detected XY speed peaks.
+
+`processed_data/chen_ls_vs_kf_fit_quality.csv`
+
+- Optional output from `plot_chen_ls_vs_kf_task_metrics.m`.
+- The script currently keeps the result table in `result_table` unless its
+  `writetable` line is uncommented.
 
 `master_dataset.csv` is the main robot metric table. It stores one row per
 subject, shape, and controller case.
@@ -103,7 +158,7 @@ Typical columns:
 
 ```text
 subject_id, shape_id, controller_id, DSJ, duration, mean_force,
-path_length_error, boundary_violation_count, beta, K, R2, RMSE
+path_length_error, beta, K, R2, RMSE, boundary_violation_count
 ```
 
 `window_metrics.csv` is the robot profile metric table. It stores many
@@ -113,38 +168,41 @@ Typical columns:
 
 ```text
 subject_id, shape_id, controller_id, metric_name, window_id,
-start_time_s, end_time_s, center_time_s, value
+start_sample, end_sample, start_time_s, end_time_s, center_time_s,
+window_size_samples, window_step_samples, window_duration_s,
+path_length, value, source_file
 ```
 
 ## Script Descriptions
 
 ### Metric Computation Scripts
 
-`compute_DSJ.m`
+`compute_DSJ_1.m`
 
 - Computes dimensionless squared jerk from one robot CSV.
 - Updates the matching row in `master_dataset.csv`.
 
-`compute_duration.m`
+`compute_duration_2.m`
 
 - Computes movement duration from one robot CSV.
 - Updates the matching row in `master_dataset.csv`.
 
-`compute_mean_force.m`
+`compute_mean_force_3.m`
 
 - Computes mean planar force magnitude from `FT1` and `FT2`.
 - Updates the matching row in `master_dataset.csv`.
 
-`compute_path_length_error.m`
+`compute_path_length_error_4.m`
 
 - Computes planar path length error against a reference length.
 - Updates the matching row in `master_dataset.csv`.
 
-`compute_powerlaw.m`
+`compute_powerlaw_5.m`
 
 - Computes whole-shape robot `beta`, `K`, `R2`, and `RMSE`.
-- Processes all shape/controller files listed in its settings.
-- Updates `master_dataset.csv`.
+- Reads one robot raw CSV per run.
+- Uses `X`, `Y`, `v_meas1`, and `v_meas2`.
+- Updates only the matching row in the selected master CSV.
 
 `compute_windowed_DSJ_.m`
 
@@ -152,11 +210,18 @@ start_time_s, end_time_s, center_time_s, value
 - Processes all shape/controller files listed in its settings.
 - Writes `processed_data/window_metrics.csv`.
 
-`compute_free_hand_powerlaw.m`
+`compute_velocity_peaks.m`
+
+- Computes XY speed profiles from robot and free-hand raw data.
+- Detects local speed peaks.
+- Writes `velocity_profiles.csv` and `velocity_peaks.csv`.
+
+`compute_free_hand_powerlaw_5.m`
 
 - Computes whole-shape power-law values from free-hand samples.
-- Reads `raw_data/free_hand/*.csv`.
-- Writes `processed_data/free_hand_powerlaw.csv`.
+- Reads one free-hand CSV per run.
+- Uses `x`, `y`, and `time_s`.
+- Updates only the matching row in `free_hand_powerlaw.csv`.
 
 ### Plotting Scripts
 
@@ -164,13 +229,32 @@ start_time_s, end_time_s, center_time_s, value
 
 - Main robot summary plotting script.
 - Reads `master_dataset.csv` and raw robot logs.
-- Compares trajectories, DSJ, duration, fit quality, beta, and K.
+- Compares trajectories, duration, R2, RMSE, DSJ, mean force, path error,
+  boundary violation, beta, and K.
+
+`plot_chen_ls_vs_kf_task_metrics.m`
+
+- Study-specific script for comparing Chen-LS and Chen-KF.
+- Reads two raw robot files and `master_dataset_chen_ls_kf_study.csv`.
+- Plots XY trajectory with velocity heatmap.
+- Plots duration, R2, RMSE, DSJ, mean force, path error, and boundary
+  violation from the study master dataset.
+- Plots `beta_hat`, `K_hat`, `curvature_hat`, `bd_applied`, damping matrix
+  entries, intended acceleration, intended force, speed, and force.
+- Also plots a `beta_hat` histogram.
 
 `plot_windowed_DSJ_trajectory_heatmap.m`
 
 - Reads `window_metrics.csv` and raw robot logs.
 - Plots XY trajectories colored by windowed DSJ values.
 - Use this to see where smoothness changes along the shape path.
+
+`plot_velocity_peaks.m`
+
+- Reads `velocity_profiles.csv` and `velocity_peaks.csv`.
+- Plots XY speed profiles and highlights detected speed peaks.
+- Uses a fixed comparison layout with Chen on the first row and Kang on the
+  second row.
 
 `plot_VAC_main.m`
 
@@ -185,19 +269,60 @@ start_time_s, end_time_s, center_time_s, value
 - Saves free-hand samples as `x`, `y`, `time_s`.
 - Writes CSV files into `raw_data/free_hand/`.
 
-## Recommended Workflow
+## Recommended Workflows
 
-1. Put robot logs in `raw_data/`.
-2. Set `read_csv_file`, `subject_id`, `shape_id`, and `controller_id` in
-   the metric script you want to run.
-3. Run metric scripts to fill `processed_data/master_dataset.csv`.
-4. Run `compute_powerlaw.m` to add `beta`, `K`, `R2`, and `RMSE`.
-5. Run `plot_metrics.m` to inspect robot controller results.
-6. Run `compute_windowed_DSJ_.m` for DSJ profile data.
-7. Run `plot_windowed_DSJ_trajectory_heatmap.m` for DSJ profiles.
-8. For free-hand comparison, collect data with `maze_INK.m`.
-9. Run `compute_free_hand_powerlaw.m`.
-10. Run `plot_VAC_main.m` when you want the main plots together.
+### Single Robot Trial Metrics
+
+1. Put the robot raw CSV in `raw_data/`.
+2. Open one metric script.
+3. Edit `read_csv_file`, `subject_id`, `shape_id`, `controller_id`, and
+   the output CSV path in the `User Settings`.
+4. Run the script.
+5. Repeat for the next metric or next trial.
+
+Useful scripts:
+
+```text
+compute_DSJ_1.m
+compute_duration_2.m
+compute_mean_force_3.m
+compute_path_length_error_4.m
+compute_powerlaw_5.m
+```
+
+### Chen-LS vs Chen-KF Study
+
+1. Put the Chen-LS and Chen-KF raw CSV files in `raw_data/`.
+2. Use controller ID `3` for Chen-LS.
+3. Use controller ID `4` for Chen-KF.
+4. Run the single-trial metric scripts for each file.
+5. Save results in `master_dataset_chen_ls_kf_study.csv`.
+6. Run `plot_chen_ls_vs_kf_task_metrics.m`.
+
+This keeps the estimator comparison separate from the older Chen vs Kang
+comparison.
+
+### Free-Hand Power Law
+
+1. Put one free-hand CSV in `raw_data/free_hand/`.
+2. Open `compute_free_hand_powerlaw_5.m`.
+3. Set `read_csv_file`, `subject_id`, `shape_id`, and `shape_name`.
+4. Run the script.
+5. Repeat for the next free-hand drawing.
+
+### Windowed DSJ
+
+1. Set the raw files, shape IDs, controller IDs, window size, and step size
+   in `compute_windowed_DSJ_.m`.
+2. Run `compute_windowed_DSJ_.m`.
+3. Run `plot_windowed_DSJ_trajectory_heatmap.m`.
+
+### Velocity Peaks
+
+1. Set the raw robot and free-hand file settings in
+   `compute_velocity_peaks.m`.
+2. Run `compute_velocity_peaks.m`.
+3. Run `plot_velocity_peaks.m`.
 
 ## Meaning Of Main Metrics
 
@@ -207,10 +332,16 @@ start_time_s, end_time_s, center_time_s, value
 | `duration` | Total movement time in seconds. |
 | `mean_force` | Mean planar force magnitude from external force signals. |
 | `path_length_error` | Measured path length minus reference path length. |
-| `beta` | Power-law exponent in `v = K * kappa^(-beta)`. |
-| `K` | Velocity scale factor in the power-law model. |
+| `boundary_violation_count` | Count of samples outside the shape boundary. |
+| `beta` | Whole-shape power-law exponent in `v = K*kappa^(-beta)`. |
+| `K` | Whole-shape velocity scale factor in the power-law model. |
 | `R2` | Log-space power-law fit quality. Higher is better. |
 | `RMSE` | Average log-space power-law fit error. Lower is better. |
+| `beta_hat` | Online controller estimate of the power-law exponent. |
+| `K_hat` | Online controller estimate of the velocity gain. |
+| `curvature_hat` | Online estimated/intended controller curvature. |
+| `bd_applied` | Applied scalar damping value. |
+| `B11`, `B12`, `B21`, `B22` | Planar damping matrix entries. |
 
 ## User-Changeable Settings
 
@@ -219,23 +350,30 @@ main values that are expected to change:
 
 | Setting | Where used |
 | --- | --- |
-| `read_csv_file` | Single-trial metric scripts. |
+| `read_csv_file` | Single-trial robot and free-hand metric scripts. |
+| `read_csv_files` | Two-file comparison scripts. |
+| `read_master_csv_file` | Plot scripts that read a master dataset. |
 | `read_raw_data_dir` | Scripts that process many robot raw files. |
-| `write_master_csv_file` | Scripts that update `master_dataset.csv`. |
+| `write_master_csv_file` | Scripts that update a robot master dataset. |
+| `write_powerlaw_csv_file` | `compute_free_hand_powerlaw_5.m`. |
 | `write_window_metrics_csv_file` | `compute_windowed_DSJ_.m`. |
-| `shape_id`, `shape_ids`, `shape_names` | Shape selection and labels. |
+| `shape_id`, `shape_ids`, `shape_name`, `shape_names` | Shape IDs/labels. |
 | `controller_id`, `controller_ids` | Controller selection. |
 | `controller_names` | Controller labels used in plots. |
-| `reference_path_length` | `compute_path_length_error.m`. |
+| `reference_path_length` | `compute_path_length_error_4.m`. |
 | `window_size_samples` | Number of samples in each DSJ window. |
 | `window_step_samples` | Number of samples between DSJ windows. |
 | `min_speed`, `min_curvature`, `max_curvature` | Power-law fitting filters. |
 | `beta_min`, `beta_max` | Power-law beta limits. |
+| `trajectory_speed_limits` | Color limits for XY speed heatmap plots. |
+| `beta_histogram_edges` | Histogram bins for `beta_hat`. |
 
 ## Notes
 
 - MATLAB commands are not run automatically by Codex unless you ask.
 - The metric scripts are intentionally simple and explicit so they are easy
   to inspect and modify later.
+- Prefer adding new analysis as a focused `compute_*.m`, `plot_*.m`, or
+  study-specific script instead of putting every figure into one file.
 - When a new VAC script is added, update this README with its input files,
   output files, and where it fits in the workflow.

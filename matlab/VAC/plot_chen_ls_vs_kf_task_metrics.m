@@ -14,6 +14,8 @@
 %
 % Outputs:
 %   A small table with beta, K, R2, RMSE, and number of valid samples.
+%   Summary plots from the Chen-LS vs Chen-KF master dataset.
+%   A trajectory figure with XY velocity heatmap.
 %   A figure comparing R2 and RMSE for Chen-LS and Chen-KF.
 %   A 3-by-2 figure comparing beta_hat, K_hat, and curvature_hat profiles.
 %   A histogram figure comparing beta_hat distributions.
@@ -36,6 +38,8 @@ controller_names = [
 
 write_result_csv_file = ...
     "./processed_data/chen_ls_vs_kf_fit_quality.csv";  % TODO output CSV
+read_master_csv_file = ...
+    "./processed_data/master_dataset_chen_ls_kf_study.csv";  % TODO
 
 controller_dt = 0.005;          % TODO controller period [s]
 min_speed = 0.005;              % TODO minimum speed [m/s]
@@ -46,6 +50,30 @@ minimum_fit_points = 10;        % TODO minimum samples for power-law fit
 beta_min = 0.0;                 % TODO lower beta bound [-]
 beta_max = 2.0 / 3.0;           % TODO upper beta bound [-]
 beta_histogram_edges = 0.0:0.005:0.7;  % TODO beta_hat histogram bins
+trajectory_speed_limits = [0, 0.20];  % TODO speed color range [m/s]
+
+controller_ids = [3, 4];        % TODO [chen_ls:3, chen_kf:4]
+
+task_metric_columns = [
+    "DSJ"                       % TODO smoothness metric column
+    "mean_force"                % TODO mean force column
+    "path_length_error"         % TODO path error column
+    "boundary_violation_count"  % TODO boundary violation column
+    ];
+
+task_metric_titles = [
+    "DSJ"
+    "Mean Force"
+    "Path Error"
+    "Boundary Violation"
+    ];
+
+task_metric_ylabels = [
+    "DSJ [-]"
+    "Mean force [N]"
+    "Path error [m]"
+    "Boundary violation count [-]"
+    ];
 
 % -------------------- Calculate Fit Quality --------------------
 beta_values = nan(numel(read_csv_files), 1);
@@ -88,6 +116,73 @@ result_table = table(controller_names, read_csv_files, beta_values, ...
     'K', 'R2', 'RMSE', 'valid_count'});
 
 % writetable(result_table, write_result_csv_file);
+
+% -------------------- Read Master Dataset --------------------
+master_dataset = readtable(read_master_csv_file);
+controller_group = categorical(master_dataset.controller_id, ...
+    controller_ids, controller_names);
+
+% -------------------- Plot Master Duration --------------------
+duration_master = nan(numel(controller_ids), 1);
+R2_master = nan(numel(controller_ids), 1);
+RMSE_master = nan(numel(controller_ids), 1);
+
+for controller_idx = 1:numel(controller_ids)
+    row_idx = master_dataset.controller_id == controller_ids(controller_idx);
+
+    duration_master(controller_idx) = mean(master_dataset.duration(row_idx));
+    R2_master(controller_idx) = mean(master_dataset.R2(row_idx));
+    RMSE_master(controller_idx) = mean(master_dataset.RMSE(row_idx));
+end
+
+figure(Name="chen_ls_vs_kf_master_duration_fit_quality", ...
+    NumberTitle="off");
+
+% subplot(1, 3, 1);
+bar(categorical(controller_names), duration_master);
+grid on;
+xlabel("Controller");
+ylabel("Duration [s]");
+title("Duration");
+
+% -------------------- Plot Master Task Metrics --------------------
+figure(Name="chen_ls_vs_kf_master_task_metrics", NumberTitle="off");
+tiledlayout(2, 2, "TileSpacing", "compact", "Padding", "compact");
+
+for metric_idx = 1:numel(task_metric_columns)
+    metric_column = task_metric_columns(metric_idx);
+    metric_value = master_dataset.(metric_column);
+
+    nexttile;
+    boxchart(controller_group, metric_value);
+    hold on;
+    swarmchart(controller_group, metric_value, 28, 'filled');
+    grid on;
+    xlabel("Controller");
+    ylabel(task_metric_ylabels(metric_idx));
+    title(task_metric_titles(metric_idx));
+end
+
+% -------------------- Plot XY Trace With Velocity Heatmap --------------------
+figure(Name="xy_trace_velocity_heatmap", NumberTitle="off");
+colormap(turbo);
+
+for file_idx = 1:numel(read_csv_files)
+    raw_table = raw_data{file_idx};
+    speed_xy = sqrt(raw_table.v_meas1.^2 + raw_table.v_meas2.^2);
+
+    subplot(1, 2, file_idx);
+    scatter(raw_table.X, raw_table.Y, 8, speed_xy, "filled");
+    grid on;
+    axis equal;
+    xlabel("X [m]");
+    ylabel("Y [m]");
+    title(controller_names(file_idx) + " XY speed heatmap");
+    xlim([0.25, 0.5]);
+    ylim([-0.2, 0.2]);
+    caxis(trajectory_speed_limits);
+    colorbar;
+end
 
 % -------------------- Plot R2 And RMSE --------------------
 figure(Name="chen_ls_vs_kf_fit_quality", NumberTitle="off");

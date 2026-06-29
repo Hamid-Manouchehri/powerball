@@ -19,12 +19,15 @@ close all;
 
 % -------------------- User Settings --------------------
 % read_csv_file = "./raw_data/squircle_chen_var_adm_schunk.csv";  % TODO
-% read_csv_file = "./raw_data/squircle_kang_indirect_var_adm_schunk.csv";  % TODO
-subject_id = 1;       % TODO [sub1:1]
-shape_id = 4;         % TODO [eight_sign:1, ellipse:2, four_leaves:3, squircle:4]
-controller_id = 1;    % TODO [chen:1, kang_indirect:2]
+% read_csv_file = "./raw_data/test_four_leaves_chen_var_adm_schunk.csv";  % TODO
+% read_csv_file = "./raw_data/test_four_leaves_chen_kf_var_adm_schunk.csv";  % TODO
 
-write_master_csv_file = "./processed_data/master_dataset.csv";
+subject_id = 1;       % TODO [sub1:1]
+shape_id = 3;         % TODO [eight_sign:1, ellipse:2, four_leaves:3, squircle:4]
+controller_id = 4;    % TODO [chen:1, kang_indirect:2, chen_ls:3, chen_kf:4]
+
+% write_master_csv_file = "./processed_data/master_dataset.csv";
+write_master_csv_file = "./processed_data/master_dataset_chen_ls_kf_study.csv";
 
 % -------------------- Read Raw Trial --------------------
 input_table = readtable(read_csv_file);

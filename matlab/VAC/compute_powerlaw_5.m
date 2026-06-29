@@ -1,8 +1,9 @@
-% Compute whole-shape power-law parameters from VAC raw datasets.
+% Compute whole-shape power-law parameters for one VAC raw dataset.
 %
-% This script reads each raw shape/controller CSV file, estimates one
-% velocity-curvature power law over the complete trajectory, and writes the
-% result into the master CSV.
+% This script reads one subject/shape/controller trial, estimates one
+% velocity-curvature power law over the complete trajectory, and writes
+% only the matching row in the master CSV. Existing rows and columns are
+% preserved.
 %
 % Power law:
 %   v = K * kappa^(-beta)
@@ -11,8 +12,10 @@
 %   log(v) = log(K) - beta * log(kappa)
 %
 % Inputs:
-%   read_raw_data_dir: folder with raw Schunk CSV files
-%   write_master_csv_file: master metric CSV file
+%   read_csv_file: raw trial CSV file
+%   subject_id: subject identifier used in master CSV
+%   shape_id: shape identifier used in master CSV
+%   controller_id: controller identifier used in master CSV
 %
 % Outputs:
 %   write_master_csv_file: updated with beta, K, R2, and RMSE columns
@@ -22,20 +25,16 @@ clear;
 close all;
 
 % -------------------- User Settings --------------------
-read_raw_data_dir = "./raw_data/";  % TODO raw data folder
-write_master_csv_file = "./processed_data/master_dataset.csv";  % TODO
+% read_csv_file = "./raw_data/eight_chen_var_adm_schunk.csv";  % TODO
+% read_csv_file = "./raw_data/test_four_leaves_chen_var_adm_schunk.csv";  % TODO
+% read_csv_file = "./raw_data/test_four_leaves_chen_kf_var_adm_schunk.csv";  % TODO
 
-subject_id = 1;  % TODO subject id in master CSV
+subject_id = 1;       % TODO [sub1:1]
+shape_id = 3;         % TODO [eight:1, ellipse:2, four_leaves:3, squircle:4]
+controller_id = 4;    % TODO [chen:1, kang_indirect:2, chen_ls:3, chen_kf:4]
 
-shape_ids = [1, 2, 3, 4];  % TODO [eight, ellipse, clover, squircle]
-shape_names = ["eight", "ellipse", "clover", "squircle"];  % TODO
-
-controller_ids = [1, 2];  % TODO [chen, kang_indirect]
-controller_names = ["Chen", "Kang"];  % TODO plot labels
-controller_file_names = [
-    "chen_var_adm_schunk"           % TODO Chen filename suffix
-    "kang_indirect_var_adm_schunk"  % TODO Kang filename suffix
-];
+write_master_csv_file = ...
+    "./processed_data/master_dataset_chen_ls_kf_study.csv";  % TODO
 
 controller_dt = 0.005;          % TODO controller period [s]
 min_speed = 0.005;              % TODO minimum speed [m/s]
@@ -46,62 +45,41 @@ minimum_fit_points = 10;        % TODO minimum samples for LS fit
 beta_min = 0.0;                 % TODO lower beta bound
 beta_max = 2.0 / 3.0;           % TODO upper beta bound
 
-% -------------------- Read Master Dataset --------------------
+% -------------------- Read Raw Trial --------------------
+raw_table = readtable(read_csv_file);
+
+x = raw_table.X;
+y = raw_table.Y;
+xd = raw_table.v_meas1;
+yd = raw_table.v_meas2;
+
+% -------------------- Estimate Whole-Shape Power Law --------------------
+[beta, K, R2, RMSE, valid_count] = estimate_whole_shape_power_law( ...
+    x, y, xd, yd, controller_dt, min_speed, min_curvature, ...
+    max_curvature, minimum_fit_points, beta_min, beta_max);
+
+% -------------------- Write/Update Master CSV --------------------
 if isfile(write_master_csv_file)
     master_table = readtable(write_master_csv_file);
 else
     master_table = table();
 end
 
-% -------------------- Estimate Whole-Shape Power Law --------------------
-fprintf("\nWhole-shape power-law estimates\n");
-beta_values = nan(numel(shape_names), numel(controller_ids));
-
-for shape_idx = 1:numel(shape_names)
-    for controller_idx = 1:numel(controller_ids)
-        read_csv_file = read_raw_data_dir + shape_names(shape_idx) + ...
-            "_" + controller_file_names(controller_idx) + ".csv";
-
-        raw_table = readtable(read_csv_file);
-
-        x = raw_table.X;
-        y = raw_table.Y;
-        xd = raw_table.v_meas1;
-        yd = raw_table.v_meas2;
-
-        [beta, K, R2, RMSE, valid_count] = estimate_whole_shape_power_law( ...
-            x, y, xd, yd, controller_dt, min_speed, min_curvature, ...
-            max_curvature, minimum_fit_points, beta_min, beta_max);
-
-        shape_id = shape_ids(shape_idx);
-        controller_id = controller_ids(controller_idx);
-        beta_values(shape_idx, controller_idx) = beta;
-
-        master_table = update_master_table( ...
-            master_table, subject_id, shape_id, controller_id, ...
-            beta, K, R2, RMSE);
-
-        fprintf("%s, controller %d: beta = %.6f, K = %.6f, ", ...
-            shape_names(shape_idx), controller_id, beta, K);
-        fprintf("R2 = %.6f, RMSE = %.6f, points = %d\n", ...
-            R2, RMSE, valid_count);
-    end
-end
-
-% -------------------- Plot Calculated Beta --------------------
-figure(Name="calculated_beta_by_shape_and_controller", NumberTitle="off");
-bar(categorical(shape_names), beta_values, "grouped");
-grid on;
-
-xlabel("Shape");
-ylabel("\beta [-]");
-title("Calculated Beta by Shape and Controller");
-legend(controller_names, "Location", "best");
+master_table = update_master_table(master_table, subject_id, shape_id, ...
+    controller_id, beta, K, R2, RMSE);
 
 writetable(master_table, write_master_csv_file);
 
-fprintf("\nMaster dataset updated:\n");
+fprintf("\nPower-law values updated in:\n");
 fprintf("%s\n", write_master_csv_file);
+fprintf("subject_id = %d, shape_id = %d, controller_id = %d\n", ...
+    subject_id, shape_id, controller_id);
+fprintf("beta = %.10f\n", beta);
+fprintf("K = %.10f\n", K);
+fprintf("R2 = %.10f\n", R2);
+fprintf("RMSE = %.10f\n", RMSE);
+fprintf("valid_count = %d\n", valid_count);
+fprintf("Rows preserved = %d\n", height(master_table));
 
 
 function [beta, K, R2, RMSE, valid_count] = ...

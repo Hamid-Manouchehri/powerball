@@ -1,9 +1,8 @@
-% Compute path length error for one VAC dataset and update the matching row.
+% Compute DSJ for one VAC dataset and update the matching master row.
 %
 % This script reads one subject/shape/controller trial, computes the
-% planar path length, compares it against a reference path length, and
-% writes only the matching row in the master CSV. Existing rows and
-% columns are preserved.
+% dimensionless squared jerk (DSJ), and writes only the matching row in
+% the master CSV. Existing rows and columns are preserved.
 %
 % Inputs:
 %   read_csv_file: raw trial CSV file
@@ -19,24 +18,35 @@ clear;
 close all;
 
 % -------------------- User Settings --------------------
-% read_csv_file = "./raw_data/squircle_chen_var_adm_schunk.csv";  % TODO
-% read_csv_file = "./raw_data/squircle_kang_indirect_var_adm_schunk.csv";  % TODO
-subject_id = 1;       % TODO [sub1:1]
-shape_id = 4;         % TODO [eight_sign:1, ellipse:2, four_leaves:3, squircle:4]
-controller_id = 1;    % TODO [chen:1, kang_indirect:2]
-reference_path_length = 3 * 1.1228;  % TODO [eight_sign:1.076, ellipse:0.9688,
-%  four_leaves:1.211, squircle:1.1228] m for 3 repetitions
+% read_csv_file = "./raw_data/eight_chen_var_adm_schunk.csv";  % TODO
+% read_csv_file = "./raw_data/test_four_leaves_chen_var_adm_schunk.csv";  % TODO
+% read_csv_file = "./raw_data/test_four_leaves_chen_kf_var_adm_schunk.csv";  % TODO
 
-write_master_csv_file = "./processed_data/master_dataset.csv";
+subject_id = 1;       % TODO [sub1:1]
+shape_id = 3;         % TODO [eight_sign:1, ellipse:2, four_leaves:3, squircle:4]
+controller_id = 4;    % TODO [chen:1, kang_indirect:2, chen_ls:3, chen_kf:4]
+
+% write_master_csv_file = "./processed_data/master_dataset.csv";  % TODO
+write_master_csv_file = "./processed_data/master_dataset_chen_ls_kf_study.csv";  % TODO
 
 % -------------------- Read Raw Trial --------------------
 input_table = readtable(read_csv_file);
 
-dx = diff(input_table.X);
-dy = diff(input_table.Y);
-path_length = sum(sqrt(dx.^2 + dy.^2));
+t = (input_table.Time_us - input_table.Time_us(1)) / 1e6;
+movement_time = t(end) - t(1);
 
-path_length_error = path_length - reference_path_length;
+step_length = sqrt(diff(input_table.X).^2 + diff(input_table.Y).^2);
+path_length = sum(step_length);
+
+vx_dsj = input_table.v_meas1;
+vy_dsj = input_table.v_meas2;
+ax_dsj = gradient(vx_dsj, t);
+ay_dsj = gradient(vy_dsj, t);
+jx_dsj = gradient(ax_dsj, t);
+jy_dsj = gradient(ay_dsj, t);
+
+jerk_squared = jx_dsj.^2 + jy_dsj.^2;
+dsj = trapz(t, jerk_squared) * movement_time^5 / path_length^2;
 
 % -------------------- Write/Update Master CSV --------------------
 if isfile(write_master_csv_file)
@@ -53,45 +63,40 @@ if isfile(write_master_csv_file)
                master_table.shape_id == shape_id & ...
                master_table.controller_id == controller_id;
 
-    if ~ismember("path_length_error", ...
-                 string(master_table.Properties.VariableNames))
-        master_table.path_length_error = nan(height(master_table), 1);
+    if ~ismember("DSJ", string(master_table.Properties.VariableNames))
+        master_table.DSJ = nan(height(master_table), 1);
     end
 
     if any(row_mask)
-        master_table.path_length_error(row_mask) = path_length_error;
+        master_table.DSJ(row_mask) = dsj;
     else
         if height(master_table) == 0
-            master_table = table(subject_id, shape_id, controller_id, ...
-                path_length_error, 'VariableNames', ...
-                {'subject_id', 'shape_id', 'controller_id', ...
-                 'path_length_error'});
+            master_table = table(subject_id, shape_id, controller_id, dsj, ...
+                'VariableNames', ...
+                {'subject_id', 'shape_id', 'controller_id', 'DSJ'});
         else
             new_row = make_appended_row(master_table, subject_id, shape_id, ...
-                                        controller_id, path_length_error);
+                                        controller_id, dsj);
             master_table = [master_table; new_row];
         end
     end
 else
-    master_table = table(subject_id, shape_id, controller_id, ...
-        path_length_error, 'VariableNames', ...
-        {'subject_id', 'shape_id', 'controller_id', 'path_length_error'});
+    master_table = table(subject_id, shape_id, controller_id, dsj, ...
+        'VariableNames', {'subject_id', 'shape_id', 'controller_id', 'DSJ'});
 end
 
 writetable(master_table, write_master_csv_file);
 
-fprintf("\nPath length error updated in:\n");
+fprintf("\nDSJ updated in:\n");
 fprintf("%s\n", write_master_csv_file);
 fprintf("subject_id = %d, shape_id = %d, controller_id = %d\n", ...
     subject_id, shape_id, controller_id);
-fprintf("path_length = %.10f\n", path_length);
-fprintf("reference_path_length = %.10f\n", reference_path_length);
-fprintf("path_length_error = %.10f\n", path_length_error);
+fprintf("DSJ = %.10f\n", dsj);
 fprintf("Rows preserved = %d\n", height(master_table));
 
 
 function new_row = make_appended_row(master_table, subject_id, shape_id, ...
-                                     controller_id, path_length_error)
+                                     controller_id, dsj)
     %MAKE_APPENDED_ROW Create one row with the master table schema.
 
     new_row = master_table(1, :);
@@ -104,7 +109,7 @@ function new_row = make_appended_row(master_table, subject_id, shape_id, ...
     new_row.subject_id = subject_id;
     new_row.shape_id = shape_id;
     new_row.controller_id = controller_id;
-    new_row.path_length_error = path_length_error;
+    new_row.DSJ = dsj;
 end
 
 
