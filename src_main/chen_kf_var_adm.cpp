@@ -338,7 +338,7 @@ static float rate_limit_damping(float desired_damping,
 
 static void push_power_law_history()
 {
-    Vector<2,float> velocity_xy = makeVector(v_meas[0], v_meas[1]);
+    Vector<2,float> velocity_xy = makeVector(v_meas_lpf[0], v_meas_lpf[1]);
 
     velocity_history.push_back(velocity_xy);
 
@@ -347,113 +347,6 @@ static void push_power_law_history()
         velocity_history.pop_front();
 }
 
-static void estimate_power_law_from_history()
-{
-    /*
-    Fits the power law:
-        v = K * kappa^(-beta)
-
-    Log form used for least squares:
-        log(v) = log(K) - beta * log(kappa)
-
-    Inputs:
-        velocity_history: recent measured Cartesian velocities [m/s].
-
-    Outputs:
-        K_hat: estimated velocity gain.
-        beta_hat: estimated power-law exponent.
-        curvature_hat: most recent valid curvature estimate [1/m].
-    */
-
-    int history_size = (int)velocity_history.size();
-
-    float sum_x = 0.0f;
-    float sum_y = 0.0f;
-    float sum_xx = 0.0f;
-    float sum_xy = 0.0f;
-    int count = 0;
-    std::vector<float> log_curvature_values;
-    std::vector<float> log_speed_values;
-
-    log_curvature_values.reserve((size_t)history_size);
-    log_speed_values.reserve((size_t)history_size);
-
-    for (int i = 1; i < history_size - 1; i++)
-    {
-        Vector<2,float> v_prev = velocity_history[i - 1];
-        Vector<2,float> v = velocity_history[i];
-        Vector<2,float> v_next = velocity_history[i + 1];
-
-        Vector<2,float> a = (v_next - v_prev) / (2.0f * dt);
-
-        float speed = vec2_norm(v);
-        if (speed < min_speed_for_guidance)
-            continue;
-
-        float curvature = fabs(vec2_cross(v, a)) / (speed * speed * speed);
-
-        if (curvature < min_curvature)
-            continue;
-
-        curvature = clampf(curvature, min_curvature, max_curvature);
-        curvature_hat = curvature;
-
-        float x = std::log(curvature);
-        float y = std::log(speed);
-
-        sum_x += x;
-        sum_y += y;
-        sum_xx += x * x;
-        sum_xy += x * y;
-        log_curvature_values.push_back(x);
-        log_speed_values.push_back(y);
-        count++;
-    }
-
-    if (count < power_law_min_points)
-    {
-        power_law_R2 = 0.0f;
-        power_law_RMSE = 0.0f;
-        indirect_ready = false;
-        return;
-    }
-
-    float denom = (float)count * sum_xx - sum_x * sum_x;
-    if (fabs(denom) < 1e-6f)
-    {
-        power_law_R2 = 0.0f;
-        power_law_RMSE = 0.0f;
-        indirect_ready = false;
-        return;
-    }
-
-    float slope = ((float)count * sum_xy - sum_x * sum_y) / denom;
-    float intercept = (sum_y - slope * sum_x) / (float)count;
-    float mean_y = sum_y / (float)count;
-    float sum_squared_error = 0.0f;
-    float total_squared_error = 0.0f;
-
-    for (int i = 0; i < count; i++)
-    {
-        float y_fit = intercept + slope * log_curvature_values[i];
-        float residual = log_speed_values[i] - y_fit;
-        float total_error = log_speed_values[i] - mean_y;
-
-        sum_squared_error += residual * residual;
-        total_squared_error += total_error * total_error;
-    }
-
-    if (total_squared_error > 1e-6f)
-        power_law_R2 = 1.0f - sum_squared_error / total_squared_error;
-    else
-        power_law_R2 = 0.0f;
-
-    power_law_RMSE = std::sqrt(sum_squared_error / (float)count);
-
-    beta_hat = clampf(-slope, beta_min, beta_max);
-    K_hat = std::exp(intercept);
-    indirect_ready = true;
-}
 
 static void update_power_law_fit_quality(float log_speed,
                                          float fitted_log_speed)
