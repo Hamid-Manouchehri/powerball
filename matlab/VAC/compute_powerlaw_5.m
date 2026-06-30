@@ -26,15 +26,15 @@ close all;
 
 % -------------------- User Settings --------------------
 % read_csv_file = "./raw_data/eight_chen_var_adm_schunk.csv";  % TODO
-% read_csv_file = "./raw_data/test_four_leaves_chen_var_adm_schunk.csv";  % TODO
-% read_csv_file = "./raw_data/test_four_leaves_chen_kf_var_adm_schunk.csv";  % TODO
+% read_csv_file = "./raw_data/nu_2_chen_var_adm_schunk.csv";  % TODO
+% read_csv_file = "./raw_data/nu_2_chen_kf_var_adm_schunk.csv";  % TODO
 
 subject_id = 1;       % TODO [sub1:1]
-shape_id = 3;         % TODO [eight:1, ellipse:2, four_leaves:3, squircle:4]
+shape_id = 2;         % TODO [eight:1, ellipse:2, four_leaves:3, squircle:4]
 controller_id = 4;    % TODO [chen:1, kang_indirect:2, chen_ls:3, chen_kf:4]
 
 write_master_csv_file = ...
-    "./processed_data/master_dataset_chen_ls_kf_study.csv";  % TODO
+    "./processed_data/master_dataset_chen_ls_kf_study_2.csv";  % TODO
 
 controller_dt = 0.005;          % TODO controller period [s]
 min_speed = 0.005;              % TODO minimum speed [m/s]

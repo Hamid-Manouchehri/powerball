@@ -27,8 +27,8 @@ close all;
 
 % -------------------- User Settings --------------------
 read_csv_files = [
-    "./raw_data/test_four_leaves_chen_var_adm_schunk.csv"
-    "./raw_data/test_four_leaves_chen_kf_var_adm_schunk.csv"
+    "./raw_data/nu_2_chen_var_adm_schunk.csv"
+    "./raw_data/nu_2_chen_kf_var_adm_schunk.csv"
 ];  % TODO two raw CSV files to compare
 
 controller_names = [
@@ -39,7 +39,7 @@ controller_names = [
 write_result_csv_file = ...
     "./processed_data/chen_ls_vs_kf_fit_quality.csv";  % TODO output CSV
 read_master_csv_file = ...
-    "./processed_data/master_dataset_chen_ls_kf_study.csv";  % TODO
+    "./processed_data/master_dataset_chen_ls_kf_study_2.csv";  % TODO
 
 controller_dt = 0.005;          % TODO controller period [s]
 min_speed = 0.005;              % TODO minimum speed [m/s]
@@ -221,8 +221,8 @@ for file_idx = 1:numel(read_csv_files)
     plot(t, raw_table.K_hat, "LineWidth", 1.1);
     grid on;
     xlabel("Time [s]");
-    ylabel("K_{hat}");
-    title(controller_names(file_idx) + " K_{hat}");
+    ylabel("VGF_{hat}");
+    title(controller_names(file_idx) + " VGF_{hat}");
     ylim([0 0.5]);
 
     subplot(3, 2, file_idx + 4);
@@ -255,14 +255,19 @@ figure(Name="chen_ls_vs_kf_damping_profile", NumberTitle="off");
 for file_idx = 1:numel(read_csv_files)
     raw_table = raw_data{file_idx};
     t = make_time_vector(raw_table, controller_dt);
-
+n=20;
     subplot(1, 2, file_idx);
-    plot(t, raw_table.bd_applied, "LineWidth", 1.1);
-    grid on;
+    % plot(t, raw_table.bd_applied, "LineWidth", 1.1);
+    plot3(raw_table.X(1:n:end), raw_table.Y(1:n:end), raw_table.bd_applied(1:n:end),'o')
+    hold on
+    plot3(raw_table.X, raw_table.Y, 0*raw_table.bd_applied,'k')
+    view(3)
+    %grid on;
     xlabel("Time [s]");
     ylabel("b_d applied [Ns/m]");
     title(controller_names(file_idx) + " bd_{applied}");
 end
+
 
 % -------------------- Plot B Matrix --------------------
 figure(Name="chen_ls_vs_kf_B_matrix_profiles", NumberTitle="off");

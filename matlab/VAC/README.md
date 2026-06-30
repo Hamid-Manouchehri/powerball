@@ -223,6 +223,13 @@ path_length, value, source_file
 - Uses `x`, `y`, and `time_s`.
 - Updates only the matching row in `free_hand_powerlaw.csv`.
 
+`plot_chen_ls_vs_kf_task_metrics.m`
+
+- After generating the `master_dataset_chen_ls_kf_study.csv`, this script plots almost
+all necessary plots for two following datasets:
+1. test_four_leaves_chen_var_adm_schunk
+2. test_four_leaves_chen_kf_var_adm_schunk
+
 ### Plotting Scripts
 
 `plot_metrics.m`
