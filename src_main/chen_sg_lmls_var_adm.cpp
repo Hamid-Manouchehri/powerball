@@ -66,8 +66,8 @@ static const float dt = 0.005f;  // TODO controller period [s]
 
 float M_inertia = 5.0f;  // TODO paper md, range: 1 to 10 kg
 
-float cmin_pos = 90.0f;   // TODO low damping, paper: 90 Ns/m
-float cmax_pos = 150.0f;  // TODO high damping, paper: 150 Ns/m
+float cmin_pos = 10.0f;   // TODO low damping, paper: 90 Ns/m
+float cmax_pos = 30.0f;  // TODO high damping, paper: 150 Ns/m
 float c_rate_max = 300.0f;  // TODO damping slew rate [Ns/m/s]
 float dc_max = c_rate_max * dt;
 
@@ -78,6 +78,7 @@ int power_law_window = 50;  // TODO paper N, number of history samples
 int power_law_min_points = 10;  // TODO minimum samples for LM fit
 
 float min_speed_for_guidance = 0.005f;  // TODO [m/s]
+float min_v_meas_speed_for_curvature = 0.005f;  // TODO [m/s]
 float min_curvature = 0.001f;  // TODO [1/m]
 float max_curvature = 200.0f;  // TODO safety limit [1/m]
 
@@ -94,6 +95,8 @@ float lm_min_cost_improvement = 1e-7f;  // TODO stop if cost barely changes
 float lm_logK_min = -10.0f;  // TODO lower VGF log bound
 float lm_logK_max = 3.0f;  // TODO upper VGF log bound
 
+static const int sg_window_size = 5;  // TODO keep 5 unless coeffs change
+
 float tangential_acc_limit = 1.0f;  // TODO [m/s^2]
 float max_intended_acc = 2.0f;  // TODO [m/s^2]
 int tangential_search_points = 21;  // TODO odd number is easiest
@@ -107,7 +110,6 @@ float ft_lpf_alpha = 0.5f;  // smaller = smoother alpha=[0 1]
 float ft_deadband = 0.05f;  // TODO force deadband [N]
 
 float lambda_dls = 0.12f;  // TODO damped least-squares IK
-float v_meas_lpf_alpha = 0.20f;  // TODO Cartesian velocity smoothing
 float qdot_lpf_alpha = 0.20f;  // TODO joint velocity smoothing
 float qdot_limit = 30.0f * (float)M_PI / 180.0f;  // TODO [rad/s]
 
@@ -126,8 +128,18 @@ float beta_hat = beta_default;
 float K_hat = 0.0f;
 float power_law_R2 = 0.0f;
 float power_law_RMSE = 0.0f;
+int lm_valid_count = 0;
+int lm_iterations_used = 0;
+float lm_cost_initial = 0.0f;
+float lm_cost_final = 0.0f;
+float lm_cost_reduction = 0.0f;
+float lm_lambda_final = 0.0f;
+float lm_step_norm_final = 0.0f;
+float lm_mean_abs_error = 0.0f;
+float lm_max_abs_error = 0.0f;
 float curvature_hat = 0.0f;
 float target_curvature = 0.0f;
+Vector<2,float> power_law_acc = makeVector(0.0f, 0.0f);
 
 float gamma1 = 1.0f;
 float gamma2 = 1.0f;
@@ -146,8 +158,9 @@ Vector<3,float> X = Zeros;
 Vector<6,float> F_modified = Zeros;
 Vector<6,float> F_cmd = Zeros;
 Vector<6,float> v_meas = Zeros;
-Vector<6,float> v_meas_lpf = Zeros;
-Vector<6,float> v_meas_lpf_prev = Zeros;
+Vector<6,float> v_meas_sg = Zeros;
+Vector<6,float> v_meas_sg_acc = Zeros;
+bool v_meas_sg_ready = false;
 Vector<6,float> vel = Zeros;
 Vector<3,float> euler_zyx = Zeros;
 
@@ -165,6 +178,8 @@ Vector<6,float> Cd_diag = makeVector(cmax_pos, cmax_pos, cmax_pos,
 Vector<6,float> Md_diag = Ones * M_inertia;
 
 std::deque< Vector<2,float> > velocity_history;
+std::deque< Vector<2,float> > acceleration_history;
+std::deque< Vector<6,float> > v_meas_history;
 std::mutex ft_mutex;
 
 Matrix<6,6,float> R_F_offset = Data(
@@ -238,6 +253,68 @@ static Vector<3,float> rotation_matrix_to_euler_zyx(
     float roll = std::atan2(R[2][1], R[2][2]);
 
     return makeVector(yaw, pitch, roll);
+}
+
+static void update_sg_velocity_kinematics()
+{
+    /*
+    Apply Savitzky-Golay filtering to Jacobian Cartesian velocity.
+
+    The controller first computes:
+        v_meas = J(q) * qdot
+
+    Then this function fits a quadratic Savitzky-Golay polynomial to
+    the newest 5 velocity samples and evaluates it at the newest sample.
+
+    Inputs:
+        v_meas: Jacobian-based Cartesian velocity [m/s, rad/s].
+
+    Outputs:
+        v_meas_sg: SG-smoothed Cartesian velocity [m/s, rad/s].
+        v_meas_sg_acc: SG Cartesian acceleration [m/s^2, rad/s^2].
+    */
+
+    v_meas_history.push_back(v_meas);
+
+    while ((int)v_meas_history.size() > sg_window_size)
+        v_meas_history.pop_front();
+
+    if ((int)v_meas_history.size() < sg_window_size)
+    {
+        v_meas_sg = v_meas;
+        v_meas_sg_acc = Zeros;
+        v_meas_sg_ready = false;
+        return;
+    }
+
+    static const float smooth_coeff[sg_window_size] = {
+        3.0f / 35.0f,
+        -5.0f / 35.0f,
+        -3.0f / 35.0f,
+        9.0f / 35.0f,
+        31.0f / 35.0f
+    };
+
+    static const float acc_coeff[sg_window_size] = {
+        26.0f / 70.0f,
+        -27.0f / 70.0f,
+        -40.0f / 70.0f,
+        -13.0f / 70.0f,
+        54.0f / 70.0f
+    };
+
+    v_meas_sg = Zeros;
+    v_meas_sg_acc = Zeros;
+
+    for (int i = 0; i < sg_window_size; i++)
+    {
+        v_meas_sg =
+            v_meas_sg + smooth_coeff[i] * v_meas_history[i];
+        v_meas_sg_acc =
+            v_meas_sg_acc + (acc_coeff[i] / dt) * v_meas_history[i];
+    }
+
+    v_meas_sg_ready = true;
 }
 
 static long long now_us()
@@ -326,13 +403,29 @@ static float rate_limit_damping(float desired_damping,
 
 static void push_power_law_history()
 {
-    Vector<2,float> velocity_xy = makeVector(v_meas[0], v_meas[1]);
+    if (!v_meas_sg_ready)
+        return;
+
+    Vector<2,float> raw_velocity_xy =
+        makeVector(v_meas[0], v_meas[1]);
+    float raw_speed = vec2_norm(raw_velocity_xy);
+
+    if (raw_speed < min_v_meas_speed_for_curvature)
+        return;
+
+    Vector<2,float> velocity_xy =
+        makeVector(v_meas_sg[0], v_meas_sg[1]);
+    Vector<2,float> acceleration_xy =
+        makeVector(v_meas_sg_acc[0], v_meas_sg_acc[1]);
 
     velocity_history.push_back(velocity_xy);
+    acceleration_history.push_back(acceleration_xy);
 
-    int max_history_size = power_law_window + 2;
+    int max_history_size = power_law_window;
     while ((int)velocity_history.size() > max_history_size)
         velocity_history.pop_front();
+    while ((int)acceleration_history.size() > max_history_size)
+        acceleration_history.pop_front();
 }
 
 static float compute_lm_power_law_cost(
@@ -382,13 +475,24 @@ static void estimate_power_law_lm_from_history()
         p = [log(K), beta]
 
     Inputs:
-        velocity_history: recent measured Cartesian velocities [m/s].
+        velocity_history: recent SG Cartesian velocities [m/s].
+        acceleration_history: recent SG Cartesian accelerations [m/s^2].
 
     Outputs:
         K_hat: estimated velocity gain factor (VGF).
         beta_hat: estimated power-law exponent.
         curvature_hat: most recent valid curvature estimate [1/m].
     */
+
+    lm_valid_count = 0;
+    lm_iterations_used = 0;
+    lm_cost_initial = 0.0f;
+    lm_cost_final = 0.0f;
+    lm_cost_reduction = 0.0f;
+    lm_lambda_final = lm_initial_lambda;
+    lm_step_norm_final = 0.0f;
+    lm_mean_abs_error = 0.0f;
+    lm_max_abs_error = 0.0f;
 
     int history_size = (int)velocity_history.size();
     std::vector<float> curvature_values;
@@ -397,13 +501,10 @@ static void estimate_power_law_lm_from_history()
     curvature_values.reserve((size_t)history_size);
     speed_values.reserve((size_t)history_size);
 
-    for (int i = 1; i < history_size - 1; i++)
+    for (int i = 0; i < history_size; i++)
     {
-        Vector<2,float> v_prev = velocity_history[i - 1];
         Vector<2,float> v = velocity_history[i];
-        Vector<2,float> v_next = velocity_history[i + 1];
-
-        Vector<2,float> a = (v_next - v_prev) / (2.0f * dt);
+        Vector<2,float> a = acceleration_history[i];
 
         float speed = vec2_norm(v);
         if (speed < min_speed_for_guidance)
@@ -416,12 +517,15 @@ static void estimate_power_law_lm_from_history()
 
         curvature = clampf(curvature, min_curvature, max_curvature);
         curvature_hat = curvature;
+        power_law_acc = a;
 
         curvature_values.push_back(curvature);
         speed_values.push_back(speed);
     }
 
     int count = (int)speed_values.size();
+    lm_valid_count = count;
+
     if (count < power_law_min_points)
     {
         power_law_R2 = 0.0f;
@@ -456,9 +560,13 @@ static void estimate_power_law_lm_from_history()
     float lambda = lm_initial_lambda;
     float cost = compute_lm_power_law_cost(
         curvature_values, speed_values, logK, beta);
+    lm_cost_initial = cost;
+    lm_cost_final = cost;
 
     for (int iteration = 0; iteration < lm_max_iterations; iteration++)
     {
+        lm_iterations_used = iteration + 1;
+
         float H00 = 0.0f;
         float H01 = 0.0f;
         float H11 = 0.0f;
@@ -491,6 +599,9 @@ static void estimate_power_law_lm_from_history()
 
         float step_logK = ( A11 * g0 - A01 * g1) / determinant;
         float step_beta = (-A01 * g0 + A00 * g1) / determinant;
+        float step_norm =
+            std::sqrt(step_logK * step_logK + step_beta * step_beta);
+        lm_step_norm_final = step_norm;
 
         float candidate_logK =
             clampf(logK + step_logK, lm_logK_min, lm_logK_max);
@@ -507,9 +618,8 @@ static void estimate_power_law_lm_from_history()
             beta = candidate_beta;
             cost = candidate_cost;
             lambda *= lm_lambda_down;
-
-            float step_norm =
-                std::sqrt(step_logK * step_logK + step_beta * step_beta);
+            lm_cost_final = cost;
+            lm_lambda_final = lambda;
 
             if (step_norm < lm_min_step_norm ||
                 cost_improvement < lm_min_cost_improvement)
@@ -520,8 +630,11 @@ static void estimate_power_law_lm_from_history()
         else
         {
             lambda *= lm_lambda_up;
+            lm_lambda_final = lambda;
         }
     }
+
+    lm_cost_reduction = lm_cost_initial - lm_cost_final;
 
     float mean_speed = 0.0f;
     for (int i = 0; i < count; i++)
@@ -530,15 +643,20 @@ static void estimate_power_law_lm_from_history()
 
     float sum_squared_error = 0.0f;
     float total_squared_error = 0.0f;
+    float sum_abs_error = 0.0f;
+    float max_abs_error = 0.0f;
 
     for (int i = 0; i < count; i++)
     {
         float log_curvature = std::log(curvature_values[i]);
         float speed_fit = std::exp(logK - beta * log_curvature);
         float residual = speed_values[i] - speed_fit;
+        float abs_error = fabs(residual);
         float total_error = speed_values[i] - mean_speed;
 
         sum_squared_error += residual * residual;
+        sum_abs_error += abs_error;
+        max_abs_error = std::max(max_abs_error, abs_error);
         total_squared_error += total_error * total_error;
     }
 
@@ -549,6 +667,8 @@ static void estimate_power_law_lm_from_history()
 
     power_law_R2 = clampf(power_law_R2, 0.0f, 1.0f);
     power_law_RMSE = std::sqrt(sum_squared_error / (float)count);
+    lm_mean_abs_error = sum_abs_error / (float)count;
+    lm_max_abs_error = max_abs_error;
 
     beta_hat = beta;
     K_hat = std::exp(logK);
@@ -628,7 +748,7 @@ static void compute_intended_acceleration()
           closest to the previous intended acceleration
     */
 
-    Vector<2,float> v = makeVector(v_meas_lpf[0], v_meas_lpf[1]);
+    Vector<2,float> v = makeVector(v_meas_sg[0], v_meas_sg[1]);
     Vector<2,float> force = makeVector(F_cmd[0], F_cmd[1]);
 
     float speed = vec2_norm(v);
@@ -713,7 +833,7 @@ static void update_guided_damping()
     force direction as the local x-axis.
     */
 
-    Vector<2,float> v = makeVector(v_meas_lpf[0], v_meas_lpf[1]);
+    Vector<2,float> v = makeVector(v_meas_sg[0], v_meas_sg[1]);
     float speed = vec2_norm(v);
     float force_magnitude = compute_planar_force_magnitude();
 
@@ -842,7 +962,6 @@ static void write_run_hyperparams_json(const std::string& json_path,
     f << "    \"F_min\": " << F_min << ",\n";
     f << "    \"F_max\": " << F_max << ",\n";
     f << "    \"ft_lpf_alpha\": " << ft_lpf_alpha << ",\n";
-    f << "    \"v_meas_lpf_alpha\": " << v_meas_lpf_alpha << ",\n";
     f << "    \"intended_force_lpf_alpha\": "
       << intended_force_lpf_alpha << ",\n";
     f << "    \"power_law_estimator\": "
@@ -859,8 +978,13 @@ static void write_run_hyperparams_json(const std::string& json_path,
       << lm_min_cost_improvement << ",\n";
     f << "    \"lm_logK_min\": " << lm_logK_min << ",\n";
     f << "    \"lm_logK_max\": " << lm_logK_max << ",\n";
+    f << "    \"sg_filter\": "
+      << "\"5_point_quadratic_backward_sg_on_v_meas\",\n";
+    f << "    \"sg_window_size\": " << sg_window_size << ",\n";
     f << "    \"min_speed_for_guidance\": "
       << min_speed_for_guidance << ",\n";
+    f << "    \"min_v_meas_speed_for_curvature\": "
+      << min_v_meas_speed_for_curvature << ",\n";
     f << "    \"min_curvature\": " << min_curvature << ",\n";
     f << "    \"max_curvature\": " << max_curvature << ",\n";
     f << "    \"tangential_acc_limit\": "
@@ -918,10 +1042,7 @@ void computations()
     F_cmd = Rmat * (R_F_offset * F_modified);
 
     v_meas = J * Qdot_a;
-    v_meas_lpf =
-        (1.0f - v_meas_lpf_alpha) * v_meas_lpf_prev +
-        v_meas_lpf_alpha * v_meas;
-    v_meas_lpf_prev = v_meas_lpf;
+    update_sg_velocity_kinematics();
 
     push_power_law_history();
     estimate_power_law_lm_from_history();
@@ -1027,7 +1148,7 @@ int main(int argc, char** argv)
     std::string write_data_csv_path =
         "/home/srisadha/hamid_powerball/src_main/data/admittance/"
         "chen_var_adm_data/" +
-        SubName + "_chen_lm_var_adm_schunk.csv";
+        SubName + "_chen_sg_lmls_var_adm_schunk.csv";
     std::ofstream dataFile(write_data_csv_path);
 
     dataFile << "Time_us,"
@@ -1039,10 +1160,18 @@ int main(int argc, char** argv)
              << "FT1,FT2,FT3,FT4,FT5,FT6,"
              << "F_cmd1,F_cmd2,F_cmd3,F_cmd4,F_cmd5,F_cmd6,"
              << "v_meas1,v_meas2,v_meas3,v_meas4,v_meas5,v_meas6,"
-             << "v_lpf1,v_lpf2,v_lpf3,v_lpf4,v_lpf5,v_lpf6,"
+             << "v_sg1,v_sg2,v_sg3,v_sg4,v_sg5,v_sg6,"
+             << "v_sg_acc1,v_sg_acc2,v_sg_acc3,"
+             << "v_sg_acc4,v_sg_acc5,v_sg_acc6,"
+             << "v_sg_ready,"
              << "vel1,vel2,vel3,vel4,vel5,vel6,"
              << "bd_desired,bd_applied,beta_hat,K_hat,"
              << "power_law_R2,power_law_RMSE,"
+             << "lm_valid_count,lm_iterations_used,"
+             << "lm_cost_initial,lm_cost_final,lm_cost_reduction,"
+             << "lm_lambda_final,lm_step_norm_final,"
+             << "lm_mean_abs_error,lm_max_abs_error,"
+             << "power_law_acc_x,power_law_acc_y,"
              << "curvature_hat,target_curvature,gamma1,gamma2,"
              << "intended_acc_x,intended_acc_y,"
              << "intended_force_x,intended_force_y,"
@@ -1051,7 +1180,7 @@ int main(int argc, char** argv)
 
     write_run_hyperparams_json(
         "/home/srisadha/hamid_powerball/src_main/data/admittance/json/" +
-        SubName + "_chen_lm_var_adm.hyperparams.json",
+        SubName + "_chen_sg_lmls_var_adm.hyperparams.json",
         SubName,
         write_data_csv_path
     );
@@ -1143,15 +1272,25 @@ int main(int argc, char** argv)
                  << v_meas[0] << "," << v_meas[1] << ","
                  << v_meas[2] << "," << v_meas[3] << ","
                  << v_meas[4] << "," << v_meas[5] << ","
-                 << v_meas_lpf[0] << "," << v_meas_lpf[1] << ","
-                 << v_meas_lpf[2] << "," << v_meas_lpf[3] << ","
-                 << v_meas_lpf[4] << "," << v_meas_lpf[5] << ","
+                 << v_meas_sg[0] << "," << v_meas_sg[1] << ","
+                 << v_meas_sg[2] << "," << v_meas_sg[3] << ","
+                 << v_meas_sg[4] << "," << v_meas_sg[5] << ","
+                 << v_meas_sg_acc[0] << "," << v_meas_sg_acc[1] << ","
+                 << v_meas_sg_acc[2] << "," << v_meas_sg_acc[3] << ","
+                 << v_meas_sg_acc[4] << "," << v_meas_sg_acc[5] << ","
+                 << (v_meas_sg_ready ? 1 : 0) << ","
                  << vel[0] << "," << vel[1] << ","
                  << vel[2] << "," << vel[3] << ","
                  << vel[4] << "," << vel[5] << ","
                  << bd_desired << "," << bd_applied << ","
                  << beta_hat << "," << K_hat << ","
                  << power_law_R2 << "," << power_law_RMSE << ","
+                 << lm_valid_count << "," << lm_iterations_used << ","
+                 << lm_cost_initial << "," << lm_cost_final << ","
+                 << lm_cost_reduction << ","
+                 << lm_lambda_final << "," << lm_step_norm_final << ","
+                 << lm_mean_abs_error << "," << lm_max_abs_error << ","
+                 << power_law_acc[0] << "," << power_law_acc[1] << ","
                  << curvature_hat << "," << target_curvature << ","
                  << gamma1 << "," << gamma2 << ","
                  << intended_acc[0] << "," << intended_acc[1] << ","
@@ -1161,7 +1300,7 @@ int main(int argc, char** argv)
                  << B_planar[0][0] << "," << B_planar[0][1] << ","
                  << B_planar[1][0] << "," << B_planar[1][1] << ","
                  << (indirect_ready ? 1 : 0) << "\n";
-                 
+
 
         sleep_to_keep_dt(t0);
     }
