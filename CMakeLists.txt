@@ -152,6 +152,13 @@ target_link_libraries(chen_lm_var_adm
     ${Boost_LIBRARIES} ${LAPACK_LIBRARIES}
 )
 
+add_executable(guo_var_adm src_main/guo_var_adm.cpp)
+target_link_libraries(guo_var_adm
+    schunk_powerball schunk_kinematics
+    extApi extApiPlatform pthread
+    ${Boost_LIBRARIES} ${LAPACK_LIBRARIES}
+)
+
 add_executable(datarecord src_main/Team6/datarecord.cpp)
 target_link_libraries(datarecord schunk_powerball schunk_kinematics extApi extApiPlatform pthread myolinux dynamixel ${Boost_LIBRARIES} ${LAPACK_LIBRARIES} ${PYTHON_LIBRARIES})
 
