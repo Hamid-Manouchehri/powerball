@@ -6,7 +6,7 @@ Paper:
     Estimation for Physical Human-Robot Interaction", IEEE TIE, 2026.
 
 Inputs:
-    Force sensor stream over TCP: external force [N].
+    ROBOTOUS RFT44-SB01 USB sensor: external force [N].
     Robot state: joint position [rad] and joint velocity [rad/s].
 
 Outputs:
@@ -28,12 +28,10 @@ Controller:
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <string>
 #include <unistd.h>
 
 #include <boost/thread.hpp>
-#include <boost/asio.hpp>
-#include <boost/array.hpp>
-#include <boost/lexical_cast.hpp>
 
 #include <chrono>
 #include <atomic>
@@ -46,12 +44,12 @@ Controller:
 #include "powerball/schunk_powerball.h"
 #include "vrep/v_repClass.h"
 #include "powerball/schunk_kinematics.h"
+#include "rft44_usb_sensor.h"
 
 #include <TooN/LU.h>
 #include <TooN/SVD.h>
 
 using namespace std;
-using boost::asio::ip::tcp;
 using namespace TooN;
 
 // -------------------- Globals (shared between threads) --------------------
@@ -67,8 +65,8 @@ float M_inertia = 10.0f;  // TODO paper m, range: 5 to 15 kg
 float bmin = 90.0f;   // TODO paper lower damping [Ns/m]
 float bmax = 150.0f;  // TODO paper upper damping [Ns/m]
 float damping_lambda = 8.0f;  // TODO paper sigmoid lambda
-float fmin = 1.0f;   // TODO paper minimum force threshold [N]
-float fmax = 11.0f;  // TODO paper maximum force threshold [N]
+float force_min = 1.0f;   // TODO paper fmin [N]
+float force_max = 11.0f;  // TODO paper fmax [N]
 
 int power_law_window = 50;  // TODO paper N, history samples
 int power_law_min_points = 10;  // TODO least-square minimum samples
@@ -89,6 +87,13 @@ float mu_speed_gain = 10.0f;  // TODO paper: mu = 1 + 10 |v|
 float ft_scale_x = 1.0f;  // TODO sensor x scale/sign
 float ft_scale_y = 1.0f;  // TODO sensor y scale/sign
 float ft_scale_z = 1.0f;  // TODO sensor z scale/sign
+
+std::string rft44_serial_port = "/dev/ttyUSB0";  // TODO RFT44 USB port
+int rft44_baud_rate = 115200;  // TODO ROBOTOUS default baud rate
+int rft44_read_timeout_ms = 20;  // TODO serial read timeout [ms]
+bool rft44_bias_at_start = true;  // TODO keep sensor unloaded at startup
+float rft44_force_divider = 50.0f;  // TODO ROBOTOUS sample default
+float rft44_torque_divider = 2000.0f;  // TODO ROBOTOUS sample default
 
 float ft_lpf_alpha = 0.5f;  // smaller = smoother alpha=[0 1]
 float ft_deadband = 0.05f;  // TODO force deadband [N]
@@ -307,7 +312,8 @@ static float compute_direct_damping_sigmoid(float force_magnitude)
     Large force means fast motion mode, so damping approaches bmin.
     */
 
-    float ratio = (force_magnitude - fmin) / (fmax - fmin);
+    float ratio = (force_magnitude - force_min) /
+                  (force_max - force_min);
     ratio = clampf(ratio, 0.0f, 1.0f);
 
     float exponent = damping_lambda * (2.0f * ratio - 1.0f);
@@ -791,8 +797,8 @@ static void write_run_hyperparams_json(const std::string& json_path,
     f << "    \"bmin\": " << bmin << ",\n";
     f << "    \"bmax\": " << bmax << ",\n";
     f << "    \"damping_lambda\": " << damping_lambda << ",\n";
-    f << "    \"fmin\": " << fmin << ",\n";
-    f << "    \"fmax\": " << fmax << ",\n";
+    f << "    \"fmin\": " << force_min << ",\n";
+    f << "    \"fmax\": " << force_max << ",\n";
     f << "    \"power_law_window\": " << power_law_window << ",\n";
     f << "    \"power_law_min_points\": "
       << power_law_min_points << ",\n";
@@ -803,6 +809,17 @@ static void write_run_hyperparams_json(const std::string& json_path,
     f << "    \"min_torsion\": " << min_torsion << ",\n";
     f << "    \"max_torsion\": " << max_torsion << ",\n";
     f << "    \"mu_speed_gain\": " << mu_speed_gain << ",\n";
+    f << "    \"ft_sensor\": \"ROBOTOUS_RFT44_SB01_USB\",\n";
+    f << "    \"rft44_serial_port\": \"" << rft44_serial_port << "\",\n";
+    f << "    \"rft44_baud_rate\": " << rft44_baud_rate << ",\n";
+    f << "    \"rft44_read_timeout_ms\": "
+      << rft44_read_timeout_ms << ",\n";
+    f << "    \"rft44_bias_at_start\": "
+      << (rft44_bias_at_start ? "true" : "false") << ",\n";
+    f << "    \"rft44_force_divider\": "
+      << rft44_force_divider << ",\n";
+    f << "    \"rft44_torque_divider\": "
+      << rft44_torque_divider << ",\n";
     f << "    \"ft_lpf_alpha\": " << ft_lpf_alpha << ",\n";
     f << "    \"ft_deadband\": " << ft_deadband << ",\n";
     f << "    \"lambda_dls\": " << lambda_dls << ",\n";
@@ -886,68 +903,73 @@ void computations()
         Qdot = Qdot * (qdot_limit / qn);
 }
 
-void TCP_receive(std::atomic<bool>* stopFlag)
+void RFT44_receive(std::atomic<bool>* stopFlag)
 {
-    boost::asio::io_service io_service;
-    tcp::endpoint sender_endpoint(
-        boost::asio::ip::address::from_string("192.168.1.30"),
-        boost::lexical_cast<int>("1000")
-    );
+    /*
+    Read ROBOTOUS RFT44-SB01 force/torque data over USB serial.
 
-    tcp::socket socket(io_service);
-    socket.connect(sender_endpoint);
-    socket.non_blocking(true);
+    Inputs:
+        stopFlag: shared stop flag from main().
 
-    boost::system::error_code ignored_error;
-    char recv_buf[128];
+    Outputs:
+        FT: shared force/torque vector [Fx Fy Fz Tx Ty Tz].
+    */
 
+    Rft44UsbSensor sensor;
+    sensor.set_port(rft44_serial_port);
+    sensor.set_baud_rate(rft44_baud_rate);
+    sensor.set_dividers(rft44_force_divider, rft44_torque_divider);
+
+    if (!sensor.open_sensor())
     {
-        std::string msg = "TARE(1)\n";
-        socket.write_some(boost::asio::buffer(msg, msg.size()),
-                          ignored_error);
-        socket.read_some(boost::asio::buffer(recv_buf), ignored_error);
+        cout << "RFT44 USB sensor open failed: "
+             << rft44_serial_port << endl;
+        return;
     }
 
+    if (rft44_bias_at_start)
     {
-        std::string msg = "L1()\n";
-        socket.write_some(boost::asio::buffer(msg, msg.size()),
-                          ignored_error);
-        socket.read_some(boost::asio::buffer(recv_buf), ignored_error);
+        cout << "RFT44 bias/tare command sent. Keep sensor unloaded."
+             << endl;
+        sensor.bias();
+        usleep(1000 * 1000);
+    }
+
+    if (!sensor.start_streaming())
+    {
+        cout << "RFT44 continuous output start failed." << endl;
+        sensor.close_sensor();
+        return;
     }
 
     while (!stopFlag->load())
     {
-        int len = socket.read_some(boost::asio::buffer(recv_buf),
-                                   ignored_error);
+        Rft44SensorSample sample;
+        bool got_sample =
+            sensor.read_sample(&sample, rft44_read_timeout_ms);
 
-        if (ignored_error == boost::asio::error::would_block ||
-            ignored_error == boost::asio::error::try_again)
+        if (!got_sample)
         {
             usleep(1000);
             continue;
         }
 
-        if (ignored_error || len <= 0)
-            continue;
-
-        if (len >= (int)sizeof(recv_buf))
-            len = (int)sizeof(recv_buf) - 1;
-
-        recv_buf[len] = '\0';
-
-        int timeStamp = 0;
         Vector<6,float> FT_tmp = Zeros;
-        int matched = sscanf(recv_buf, "F={%f,%f,%f,%f,%f,%f},%d",
-                             &FT_tmp[0], &FT_tmp[1], &FT_tmp[2],
-                             &FT_tmp[3], &FT_tmp[4], &FT_tmp[5],
-                             &timeStamp);
+        FT_tmp[0] = sample.fx;
+        FT_tmp[1] = sample.fy;
+        FT_tmp[2] = sample.fz;
+        FT_tmp[3] = sample.tx;
+        FT_tmp[4] = sample.ty;
+        FT_tmp[5] = sample.tz;
 
-        if (matched == 7)
         {
             std::lock_guard<std::mutex> lock(ft_mutex);
             FT = FT_tmp;
         }
     }
+
+    sensor.stop_streaming();
+    sensor.close_sensor();
 }
 
 int main(int argc, char** argv)
@@ -1042,7 +1064,7 @@ int main(int argc, char** argv)
     pb.set_control_mode(MODES_OF_OPERATION_VELOCITY_MODE);
     pb.update();
 
-    boost::thread FT_thread(TCP_receive, &stop_flag);
+    boost::thread FT_thread(RFT44_receive, &stop_flag);
 
     cout << "Guo 3-D intention admittance loop started! "
          << "(press Enter to stop)\n";

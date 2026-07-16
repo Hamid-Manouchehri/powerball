@@ -138,6 +138,11 @@ target_link_libraries(admittance_pb_velMode schunk_powerball schunk_kinematics e
 add_executable(admittance_var src_main/admittance_var.cpp)
 target_link_libraries(admittance_var schunk_powerball schunk_kinematics extApi extApiPlatform pthread ${Boost_LIBRARIES} ${LAPACK_LIBRARIES})
 
+add_executable(rft44_usb_test
+    src_main/rft44_usb_test.cpp
+    src_main/rft44_usb_sensor.cpp
+)
+
 add_executable(chen_var_adm_indirect src_main/chen_var_adm_indirect.cpp)
 target_link_libraries(chen_var_adm_indirect
     schunk_powerball schunk_kinematics
@@ -152,7 +157,10 @@ target_link_libraries(chen_lm_var_adm
     ${Boost_LIBRARIES} ${LAPACK_LIBRARIES}
 )
 
-add_executable(guo_var_adm src_main/guo_var_adm.cpp)
+add_executable(guo_var_adm
+    src_main/guo_var_adm.cpp
+    src_main/rft44_usb_sensor.cpp
+)
 target_link_libraries(guo_var_adm
     schunk_powerball schunk_kinematics
     extApi extApiPlatform pthread
